@@ -57,7 +57,7 @@ def main():
 
     exe_cands = glob.glob(f"{target_dir}/**/bundle/nsis/*-setup.exe", recursive=True)
     zip_cands = glob.glob(f"{target_dir}/**/bundle/nsis/*.nsis.zip", recursive=True)
-    sig_cands = glob.glob(f"{target_dir}/**/bundle/nsis/*.nsis.zip.sig", recursive=True)
+    sig_cands = glob.glob(f"{target_dir}/**/bundle/nsis/*.sig", recursive=True)
     json_cands = glob.glob(f"{target_dir}/**/latest.json", recursive=True)
 
     print(f"Found setup.exe:   {exe_cands}")
@@ -67,22 +67,27 @@ def main():
 
     if not exe_cands:
         raise SystemExit("FAILED: Standalone NSIS installer (*-setup.exe) not found!")
-    if not zip_cands:
-        raise SystemExit("FAILED: Updater archive (*.nsis.zip) not found! Ensure TAURI_SIGNING_PRIVATE_KEY was set.")
     if not sig_cands:
-        raise SystemExit("FAILED: Minisign signature file (*.nsis.zip.sig) not found!")
+        raise SystemExit("FAILED: Minisign signature file (*.sig) not found! Ensure TAURI_SIGNING_PRIVATE_KEY was set.")
 
     setup_exe = os.path.abspath(exe_cands[0])
-    updater_zip = os.path.abspath(zip_cands[0])
-    updater_sig = os.path.abspath(sig_cands[0])
+
+    if zip_cands:
+        updater_payload = os.path.abspath(zip_cands[0])
+        sig_match = [s for s in sig_cands if s.endswith('.nsis.zip.sig')]
+        updater_sig = os.path.abspath(sig_match[0] if sig_match else sig_cands[0])
+    else:
+        updater_payload = setup_exe
+        sig_match = [s for s in sig_cands if s.endswith('.exe.sig')]
+        updater_sig = os.path.abspath(sig_match[0] if sig_match else sig_cands[0])
 
     with open(updater_sig, "r", encoding="utf-8") as f:
         sig_raw = f.read().strip()
 
     if not json_cands:
-        # Generate updater manifest latest.json alongside the updater zip
+        # Generate updater manifest latest.json alongside the updater payload
         latest_json_path = os.path.join(os.path.dirname(updater_sig), "latest.json")
-        zip_filename = os.path.basename(updater_zip)
+        payload_filename = os.path.basename(updater_payload)
         manifest_data = {
             "version": app_version,
             "notes": f"Orange AI Desktop {app_version} official production release",
@@ -90,7 +95,7 @@ def main():
             "platforms": {
                 "windows-x86_64": {
                     "signature": sig_raw,
-                    "url": f"https://github.com/blAkeHoax/orange-ai/releases/download/v{app_version}/{zip_filename}"
+                    "url": f"https://github.com/blAkeHoax/orange-ai/releases/download/v{app_version}/{payload_filename}"
                 }
             }
         }
@@ -103,12 +108,12 @@ def main():
 
     print(f"\n[ARTIFACT INVENTORY]")
     print(f"  Installer:  {setup_exe} ({os.path.getsize(setup_exe):,} bytes)")
-    print(f"  Updater:    {updater_zip} ({os.path.getsize(updater_zip):,} bytes)")
+    print(f"  Payload:    {updater_payload} ({os.path.getsize(updater_payload):,} bytes)")
     print(f"  Signature:  {updater_sig} ({os.path.getsize(updater_sig):,} bytes)")
     print(f"  Manifest:   {latest_json} ({os.path.getsize(latest_json):,} bytes)")
 
     # 3. SHA-256 Checksums
-    for name, path in [("Installer", setup_exe), ("Updater Zip", updater_zip), ("Manifest", latest_json)]:
+    for name, path in [("Installer", setup_exe), ("Payload", updater_payload), ("Manifest", latest_json)]:
         with open(path, "rb") as f:
             h = hashlib.sha256(f.read()).hexdigest()
         print(f"  SHA-256 ({name}): {h}")
@@ -125,7 +130,7 @@ def main():
     print(f"  Minisign Algorithm: {algo}")
     print(f"  Key ID:             {key_id.hex()}")
 
-    # 4. Verify Minisign Signature over .nsis.zip
+    # 4. Verify Minisign Signature over payload
     sig_lines = base64.b64decode(sig_raw).decode("utf-8").splitlines()
     sig_bytes = base64.b64decode(sig_lines[1].strip())
     sig_algo = sig_bytes[:2]
@@ -135,16 +140,16 @@ def main():
     if key_id != sig_key_id:
         raise SystemExit(f"FAILED: Signature key ID {sig_key_id.hex()} does not match configured public key ID {key_id.hex()}!")
 
-    with open(updater_zip, "rb") as f:
-        zip_data = f.read()
+    with open(updater_payload, "rb") as f:
+        payload_data = f.read()
 
     # Minisign prehashed with BLAKE2b-512
-    h = hashlib.blake2b(zip_data).digest()
+    h = hashlib.blake2b(payload_data).digest()
 
     try:
         verify_ed25519(ed25519_pub, raw_sig, h)
         print("\n[CRYPTOGRAPHIC VERIFICATION SUCCESSFUL]")
-        print("  The updater archive (.nsis.zip) signature is authentic and verified by the configured public key!")
+        print("  The updater payload signature is authentic and verified by the configured public key!")
     except Exception as e:
         raise SystemExit(f"FAILED: Cryptographic signature verification failed: {e}")
 

@@ -201,7 +201,7 @@ class TestStage4_5BPhase6ProductionUpdateVerification(unittest.TestCase):
         self.assertIn("url", win_entry)
         self.assertIn("signature", win_entry)
         self.assertTrue(win_entry["url"].startswith("https://github.com/blAkeHoax/orange-ai/releases/download/"))
-        self.assertTrue(win_entry["url"].endswith(".nsis.zip"))
+        self.assertTrue(win_entry["url"].endswith(".nsis.zip") or win_entry["url"].endswith(".exe"))
         self.assertGreater(len(win_entry["signature"]), 50)
         print(f"[GATE 5.1] Verified production manifest for v{manifest['version']} at {win_entry['url']}")
 

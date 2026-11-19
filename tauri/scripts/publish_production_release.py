@@ -47,15 +47,24 @@ def main():
     target_dir = "tauri/src-tauri/target"
     exe_cands = glob.glob(f"{target_dir}/**/bundle/nsis/*-setup.exe", recursive=True)
     zip_cands = glob.glob(f"{target_dir}/**/bundle/nsis/*.nsis.zip", recursive=True)
-    sig_cands = glob.glob(f"{target_dir}/**/bundle/nsis/*.nsis.zip.sig", recursive=True)
+    sig_cands = glob.glob(f"{target_dir}/**/bundle/nsis/*.sig", recursive=True)
     json_cands = glob.glob(f"{target_dir}/**/latest.json", recursive=True)
 
-    if not (exe_cands and zip_cands and sig_cands):
-        raise SystemExit("FAILED: Installer, updater zip, or signature artifact is missing from target/!")
+    if not exe_cands:
+        raise SystemExit("FAILED: Standalone NSIS installer not found!")
+    if not sig_cands:
+        raise SystemExit("FAILED: Minisign signature artifact not found!")
 
     setup_exe = os.path.abspath(exe_cands[0])
-    updater_zip = os.path.abspath(zip_cands[0])
-    updater_sig = os.path.abspath(sig_cands[0])
+
+    if zip_cands:
+        updater_payload = os.path.abspath(zip_cands[0])
+        sig_match = [s for s in sig_cands if s.endswith('.nsis.zip.sig')]
+        updater_sig = os.path.abspath(sig_match[0] if sig_match else sig_cands[0])
+    else:
+        updater_payload = setup_exe
+        sig_match = [s for s in sig_cands if s.endswith('.exe.sig')]
+        updater_sig = os.path.abspath(sig_match[0] if sig_match else sig_cands[0])
 
     if not json_cands:
         import datetime
@@ -69,7 +78,7 @@ def main():
             "platforms": {
                 "windows-x86_64": {
                     "signature": sig_raw,
-                    "url": f"https://github.com/blAkeHoax/orange-ai/releases/download/v2.0.0/{os.path.basename(updater_zip)}"
+                    "url": f"https://github.com/blAkeHoax/orange-ai/releases/download/v2.0.0/{os.path.basename(updater_payload)}"
                 }
             }
         }
@@ -156,10 +165,11 @@ Official production release of **Orange AI Desktop 2.0** for Windows 10 and newe
     # 4. Upload Assets
     assets_to_upload = [
         (setup_exe, "application/octet-stream"),
-        (updater_zip, "application/zip"),
         (updater_sig, "text/plain"),
         (latest_json, "application/json"),
     ]
+    if updater_payload != setup_exe:
+        assets_to_upload.append((updater_payload, "application/zip"))
 
     for fpath, ctype in assets_to_upload:
         upload_asset(upload_url, headers, fpath, ctype)

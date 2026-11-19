@@ -372,7 +372,7 @@ jobs:
           path: |
             tauri/src-tauri/target/**/bundle/nsis/*-setup.exe
             tauri/src-tauri/target/**/bundle/nsis/*.nsis.zip
-            tauri/src-tauri/target/**/bundle/nsis/*.nsis.zip.sig
+            tauri/src-tauri/target/**/bundle/nsis/*.sig
             tauri/src-tauri/target/**/latest.json
           retention-days: 5
 
