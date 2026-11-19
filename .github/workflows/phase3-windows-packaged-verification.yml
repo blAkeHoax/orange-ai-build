@@ -41,7 +41,7 @@ jobs:
           cache-dependency-path: 'tauri/package-lock.json'
 
       - name: Set up Rust MSVC Toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable (2026-11-15)
         with:
           targets: x86_64-pc-windows-msvc
 
