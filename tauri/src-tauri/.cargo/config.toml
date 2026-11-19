@@ -1,0 +1,6 @@
+[target.x86_64-pc-windows-gnu]
+linker = "C:\\Users\\User\\AppData\\Local\\llvm-mingw-20261020-ucrt-x86_64\\bin\\x86_64-w64-mingw32-gcc.exe"
+ar = "C:\\Users\\User\\AppData\\Local\\llvm-mingw-20261020-ucrt-x86_64\\bin\\x86_64-w64-mingw32-ar.exe"
+
+[build]
+target = "x86_64-pc-windows-gnu"

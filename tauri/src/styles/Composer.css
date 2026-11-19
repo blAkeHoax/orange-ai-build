@@ -1,0 +1,118 @@
+/* Floating Bottom Composer */
+
+.composer-container {
+  position: absolute;
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(780px, calc(100% - 64px));
+  z-index: 50;
+  pointer-events: auto;
+}
+
+.composer-form {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.composer-pill {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--composer-bg);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--composer-border);
+  box-shadow: var(--composer-shadow);
+  border-radius: 9999px;
+  padding: 6px 16px;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background var(--transition-fast);
+}
+
+.composer-pill:focus-within {
+  border-color: var(--composer-border-focus);
+  box-shadow: var(--composer-shadow), 0 0 16px rgba(255, 107, 0, 0.2);
+}
+
+.composer-action-btn {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--composer-icon-color);
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--transition-fast), background-color var(--transition-fast), transform var(--transition-fast);
+}
+
+.composer-action-btn:hover {
+  color: var(--composer-icon-hover);
+  background-color: var(--bg-card-hover);
+  transform: scale(1.08);
+}
+
+.composer-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--composer-input-color);
+  font-family: var(--font-family);
+  font-size: 15px;
+  line-height: 1.4;
+  padding: 6px 0;
+}
+
+.composer-input::placeholder {
+  color: var(--composer-placeholder);
+  font-weight: 400;
+}
+
+/* Separate Orange Circular Send Button */
+.composer-send-btn {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #FF7A00 0%, #FF5500 100%);
+  border: none;
+  outline: none;
+  color: #FFFFFF;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 4px 16px var(--color-orange-glow);
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast), opacity var(--transition-fast);
+  opacity: 0.85;
+}
+
+.composer-send-btn.is-ready {
+  opacity: 1;
+  box-shadow: 0 6px 22px rgba(255, 107, 0, 0.55);
+}
+
+.composer-send-btn:hover:not(:disabled) {
+  transform: scale(1.06);
+  box-shadow: 0 8px 26px rgba(255, 107, 0, 0.65);
+}
+
+.composer-send-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.composer-send-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: 0 2px 8px rgba(255, 107, 0, 0.2);
+}
+
+.send-icon {
+  transform: translateX(1px);
+}

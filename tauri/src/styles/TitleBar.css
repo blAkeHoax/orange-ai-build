@@ -1,0 +1,82 @@
+.titlebar {
+  height: var(--titlebar-height);
+  background-color: var(--titlebar-bg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0 0 14px;
+  user-select: none;
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast);
+  z-index: 1000;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.titlebar-left {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.titlebar-app-name {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--titlebar-text);
+  pointer-events: none;
+}
+
+.titlebar-center {
+  flex: 1;
+  height: 100%;
+}
+
+.titlebar-right {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.titlebar-theme-btn {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--titlebar-text);
+  cursor: pointer;
+  height: 100%;
+  width: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.titlebar-theme-btn:hover {
+  background-color: var(--titlebar-btn-hover);
+  color: var(--color-orange);
+}
+
+.titlebar-control-btn {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--titlebar-text);
+  cursor: pointer;
+  height: 100%;
+  width: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.titlebar-control-btn:hover {
+  background-color: var(--titlebar-btn-hover);
+  color: var(--text-primary);
+}
+
+.titlebar-control-btn.btn-close:hover {
+  background-color: #E81123 !important;
+  color: #FFFFFF !important;
+}

@@ -1,0 +1,73 @@
+# ==============================================================================
+# Orange AI Private Build Repository - Authoritative .gitignore
+# ==============================================================================
+
+# OS and Editor Artifacts
+Thumbs.db
+Desktop.ini
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python Bytecode and Compilation Artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.manifest
+*.spec.bak
+
+# Python Virtual Environments (Portability)
+venv/
+.venv/
+env/
+ENV/
+
+# Node.js Dependencies and Package Caches
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Rust & Tauri Intermediate Build Artifacts
+target/
+build/
+dist/
+build_runtime/
+
+# Compiled Binaries and Libraries (Managed by CI)
+*.exe
+*.dll
+*.pyd
+*.so
+*.dylib
+
+# SQLite Databases & Operational State (STRICT PRIVACY ENFORCEMENT)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.bak
+*.bak_*
+backups/
+
+# Operational Telemetry, Runtime & Test Logs
+*.log
+*.log.*
+app_stdout.log
+app_stderr.log
+tauri_stdout.log
+tauri_stderr.log
+test_stderr.log
+smoke_test_runtime_stderr.log
+
+# Local Machine Settings & IPC Control Commands
+gui_settings.json
+ui_command.json
+
+# Environment Files & Secrets (STRICT CREDENTIAL PROTECTION)
+.env
+.env.*
+!.env.example

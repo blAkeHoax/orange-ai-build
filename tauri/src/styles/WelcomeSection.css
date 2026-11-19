@@ -1,0 +1,24 @@
+.welcome-section {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  z-index: 10;
+  max-width: 620px;
+  pointer-events: auto;
+}
+
+.welcome-title {
+  font-size: clamp(30px, 4.2vw, 48px);
+  font-weight: 400;
+  line-height: 1.22;
+  letter-spacing: -0.025em;
+  color: var(--text-primary);
+  user-select: none;
+}
+
+.welcome-name-highlight {
+  font-weight: 600;
+  color: var(--color-orange);
+  text-shadow: 0 0 24px rgba(255, 107, 0, 0.28);
+}

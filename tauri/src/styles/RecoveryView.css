@@ -1,0 +1,343 @@
+/* src/styles/RecoveryView.css - Recovery View Styling */
+.recovery-viewport {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  background-color: var(--color-bg-primary, #0D0E11);
+  color: var(--color-text-primary, #EDEDED);
+  overflow: hidden;
+  user-select: none;
+}
+
+.recovery-content-container {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.recovery-card {
+  width: 100%;
+  max-width: 680px;
+  background: var(--color-bg-secondary, rgba(22, 24, 29, 0.95));
+  border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 12px;
+  padding: 32px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(16px);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.recovery-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+}
+
+.recovery-icon-badge {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(255, 119, 0, 0.12);
+  border: 1px solid rgba(255, 119, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #FF7700;
+  margin-bottom: 4px;
+}
+
+.recovery-badge-tag {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(255, 176, 32, 0.15);
+  color: #FFB020;
+  border: 1px solid rgba(255, 176, 32, 0.3);
+}
+
+.recovery-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #FFFFFF;
+  margin: 0;
+}
+
+.recovery-subtitle {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-secondary, #A0A5B1);
+  margin: 0;
+  max-width: 540px;
+}
+
+.recovery-diagnostic-box {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-left: 3px solid #FF7700;
+  border-radius: 6px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diagnostic-row.header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.diag-icon {
+  color: #FF7700;
+}
+
+.diag-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #EDEDED;
+}
+
+.diagnostic-description {
+  font-size: 12px;
+  color: #B5B9C4;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.diagnostic-version-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.version-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: monospace;
+}
+
+.pill-label {
+  color: #8C92A4;
+}
+
+.pill-val {
+  color: #FFA040;
+  font-weight: 600;
+}
+
+.recovery-safeguard-box {
+  background: rgba(46, 204, 113, 0.08);
+  border: 1px solid rgba(46, 204, 113, 0.25);
+  border-radius: 6px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.safeguard-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #2ECC71;
+}
+
+.safeguard-icon {
+  flex-shrink: 0;
+}
+
+.safeguard-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.safeguard-text {
+  font-size: 12px;
+  color: #B2D8C3;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.safeguard-text code {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #FFFFFF;
+}
+
+.recovery-guidance-box {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+
+.guidance-heading {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8C92A4;
+  margin: 0 0 8px 0;
+}
+
+.guidance-steps {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 12px;
+  color: #B5B9C4;
+  line-height: 1.5;
+}
+
+.guidance-steps li {
+  margin-bottom: 4px;
+}
+
+.guidance-steps code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #EDEDED;
+}
+
+.guidance-notice {
+  margin: 10px 0 0 0;
+  font-size: 11px;
+  color: #8C92A4;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.recovery-feedback-message {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(255, 176, 32, 0.15);
+  color: #FFB020;
+  font-size: 12px;
+  text-align: center;
+}
+
+.recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.recovery-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid transparent;
+}
+
+.btn-primary {
+  background: #FF7700;
+  color: #FFFFFF;
+  flex: 1 1 200px;
+}
+
+.btn-primary:hover {
+  background: #E66A00;
+  transform: translateY(-1px);
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.06);
+  color: #EDEDED;
+  border-color: rgba(255, 255, 255, 0.12);
+  flex: 1 1 140px;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.btn-secondary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-ghost-danger {
+  background: transparent;
+  color: #FF5555;
+  border-color: rgba(255, 85, 85, 0.25);
+  flex: 0 0 auto;
+}
+
+.btn-ghost-danger:hover {
+  background: rgba(255, 85, 85, 0.1);
+  border-color: rgba(255, 85, 85, 0.4);
+}
+
+.btn-subicon {
+  opacity: 0.8;
+  margin-left: 2px;
+}
+
+.spin {
+  animation: recovery-spin 1s linear infinite;
+}
+
+@keyframes recovery-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Startup Splash Styles */
+.startup-splash {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  width: 100vw;
+  background-color: var(--color-bg-primary, #0D0E11);
+  color: var(--color-text-secondary, #A0A5B1);
+  gap: 16px;
+  user-select: none;
+}
+
+.startup-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(255, 119, 0, 0.2);
+  border-top-color: #FF7700;
+  border-radius: 50%;
+  animation: recovery-spin 0.8s linear infinite;
+}
+
+.startup-text {
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: #8C92A4;
+}
