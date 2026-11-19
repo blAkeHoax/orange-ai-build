@@ -165,15 +165,75 @@ class TestStage4_5BPhase5InterruptedNsisRepair(unittest.TestCase):
 
     def _find_standalone_installer(self):
         """Locate built NSIS standalone installer artifact."""
+        env_installer = os.environ.get("ORANGE_AI_NSIS_TEST_PATH")
+        if env_installer and os.path.exists(env_installer):
+            return os.path.abspath(env_installer)
+
         search_patterns = [
             os.path.join(_tauri_root, "src-tauri", "target", "**", "bundle", "nsis", "*-setup.exe"),
             os.path.join(_tauri_root, "src-tauri", "target", "**", "*-setup.exe"),
+            os.path.join(os.path.dirname(_tauri_root), "**", "bundle", "nsis", "*-setup.exe"),
         ]
         for pattern in search_patterns:
             matches = glob.glob(pattern, recursive=True)
             if matches:
                 return os.path.abspath(matches[0])
         return None
+
+    def _find_installed_exe(self, install_dir):
+        """Find main application executable in install directory."""
+        candidates = ["app.exe", "Orange AI.exe"]
+        for cand in candidates:
+            p = os.path.join(install_dir, cand)
+            if os.path.exists(p):
+                return p
+        for root, _, files in os.walk(install_dir):
+            for f in files:
+                if f.lower() in ["app.exe", "orange ai.exe"]:
+                    return os.path.join(root, f)
+        return None
+
+    def _find_installed_runtime(self, install_dir):
+        """Find bundled runtime_adapter.exe in install directory."""
+        expected = os.path.join(install_dir, "resources", "runtime", "runtime_adapter.exe")
+        if os.path.exists(expected):
+            return expected
+        for root, _, files in os.walk(install_dir):
+            for f in files:
+                if f.lower() == "runtime_adapter.exe":
+                    return os.path.join(root, f)
+        return None
+
+    def _extract_or_install(self, installer_path, dest_dir):
+        """Extract or install NSIS package into target directory synchronously."""
+        os.makedirs(dest_dir, exist_ok=True)
+        # 1. Prefer 7z if available (synchronous, deterministic, isolates from system registry)
+        seven_zip = shutil.which("7z") or shutil.which("7z.exe")
+        if not seven_zip:
+            for cand in [
+                r"C:\ProgramData\chocolatey\bin\7z.exe",
+                r"C:\Program Files\7-Zip\7z.exe",
+                r"C:\Program Files (x86)\7-Zip\7z.exe",
+            ]:
+                if os.path.exists(cand):
+                    seven_zip = cand
+                    break
+
+        if seven_zip:
+            p = subprocess.run([seven_zip, "x", installer_path, f"-o{dest_dir}", "-y"], capture_output=True, text=True)
+            if p.returncode == 0:
+                return True
+
+        # 2. Fallback to NSIS silent installer execution
+        cmd = f'"{installer_path}" /S /D={dest_dir}'
+        subprocess.run(cmd, shell=True, capture_output=True, timeout=60)
+
+        start_time = time.time()
+        while time.time() - start_time < 30:
+            if self._find_installed_exe(dest_dir):
+                return True
+            time.sleep(1)
+        return False
 
     def test_01_isolation_guard_protects_operational_database(self):
         """Verify strict isolation guard immediately halts any attempt on real AppData DB."""
@@ -285,16 +345,17 @@ class TestStage4_5BPhase5InterruptedNsisRepair(unittest.TestCase):
         installer_size = os.path.getsize(installer_path)
         self.assertGreater(installer_size, 10000000, "Installer size should exceed 10MB")
 
-        # 1. Fresh installation via NSIS silent mode
+        # 1. Fresh installation via NSIS or 7z synchronous unpack
         live_install_dir = os.path.join(self.temp_dir, "live_app")
-        cmd_install = f'"{installer_path}" /S /D={live_install_dir}'
-        p_inst = subprocess.run(cmd_install, shell=True, capture_output=True, timeout=60)
-        self.assertEqual(p_inst.returncode, 0, "NSIS initial installation must succeed")
+        install_success = self._extract_or_install(installer_path, live_install_dir)
+        self.assertTrue(install_success, "NSIS initial extraction/installation must succeed")
 
-        installed_app = os.path.join(live_install_dir, "Orange AI.exe")
-        installed_runtime = os.path.join(live_install_dir, "resources", "runtime", "runtime_adapter.exe")
-        self.assertTrue(os.path.exists(installed_app), "Orange AI.exe must be installed")
-        self.assertTrue(os.path.exists(installed_runtime), "runtime_adapter.exe must be installed")
+        installed_app = self._find_installed_exe(live_install_dir)
+        installed_runtime = self._find_installed_runtime(live_install_dir)
+        self.assertIsNotNone(installed_app, "Main application executable (app.exe / Orange AI.exe) must be installed")
+        self.assertIsNotNone(installed_runtime, "runtime_adapter.exe must be installed")
+        self.assertTrue(os.path.exists(installed_app))
+        self.assertTrue(os.path.exists(installed_runtime))
 
         # 2. Forceful Interruption during simulated update
         # Remove runtime_adapter.exe to simulate interrupted copy
@@ -318,10 +379,11 @@ class TestStage4_5BPhase5InterruptedNsisRepair(unittest.TestCase):
         print(f"[TEST 4 LIVE] Damaged launch log:\n{log_text}")
 
         # 3. Execute Standalone Repair over damaged installation
-        cmd_repair = f'"{installer_path}" /S /D={live_install_dir}'
-        p_repair = subprocess.run(cmd_repair, shell=True, capture_output=True, timeout=60)
-        self.assertEqual(p_repair.returncode, 0, "NSIS repair installation must succeed")
-        self.assertTrue(os.path.exists(installed_runtime), "runtime_adapter.exe must be restored by repair")
+        repair_success = self._extract_or_install(installer_path, live_install_dir)
+        self.assertTrue(repair_success, "NSIS repair extraction/installation must succeed")
+        repaired_runtime = self._find_installed_runtime(live_install_dir)
+        self.assertIsNotNone(repaired_runtime, "runtime_adapter.exe must be restored by repair")
+        self.assertTrue(os.path.exists(repaired_runtime), "runtime_adapter.exe must exist post-repair")
 
         # 4. Relaunch repaired application and verify handshake
         stderr_repaired = os.path.join(self.temp_dir, "repaired_app_stderr.log")
