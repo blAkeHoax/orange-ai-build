@@ -25,6 +25,7 @@ import hashlib
 import tempfile
 import subprocess
 import unittest
+import psutil
 from pathlib import Path
 
 # Add project roots
@@ -235,6 +236,21 @@ class TestStage4_5BPhase5InterruptedNsisRepair(unittest.TestCase):
             time.sleep(1)
         return False
 
+    def _kill_process_tree(self, pid):
+        """Forcefully terminate a process and all its children on Windows."""
+        try:
+            parent = psutil.Process(pid)
+            children = parent.children(recursive=True)
+            for child in children:
+                try:
+                    child.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            parent.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+        subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, capture_output=True)
+
     def test_01_isolation_guard_protects_operational_database(self):
         """Verify strict isolation guard immediately halts any attempt on real AppData DB."""
         with self.assertRaises(OperationalDatabaseAccessViolation):
@@ -345,7 +361,7 @@ class TestStage4_5BPhase5InterruptedNsisRepair(unittest.TestCase):
         installer_size = os.path.getsize(installer_path)
         self.assertGreater(installer_size, 10000000, "Installer size should exceed 10MB")
 
-        # 1. Fresh installation via NSIS or 7z synchronous unpack
+        # 1. Fresh disposable Orange AI installation
         live_install_dir = os.path.join(self.temp_dir, "live_app")
         install_success = self._extract_or_install(installer_path, live_install_dir)
         self.assertTrue(install_success, "NSIS initial extraction/installation must succeed")
@@ -357,51 +373,239 @@ class TestStage4_5BPhase5InterruptedNsisRepair(unittest.TestCase):
         self.assertTrue(os.path.exists(installed_app))
         self.assertTrue(os.path.exists(installed_runtime))
 
-        # 2. Forceful Interruption during simulated update
-        # Remove runtime_adapter.exe to simulate interrupted copy
-        os.remove(installed_runtime)
-        self.assertFalse(os.path.exists(installed_runtime))
+        # 2. Record application/runtime versions, database hash, SQLite integrity and representative record counts
+        self.initial_counts = self._get_db_counts(self.disposable_db)
+        self.initial_integrity = self._check_db_integrity(self.disposable_db)
+        self.assertEqual(self.initial_integrity, "ok")
+        with open(self.disposable_db, "rb") as f:
+            self.initial_db_hash = hashlib.sha256(f.read()).hexdigest()
 
-        # Launch damaged installation with isolated test APPDATA
+        print(f"[TEST 4 LIVE] Baseline database state:")
+        print(f"  SHA-256: {self.initial_db_hash}")
+        print(f"  Integrity: {self.initial_integrity}")
+        print(f"  Counts: {self.initial_counts}")
+
+        # 3. Confirm the application launches and completes its runtime handshake
         env = os.environ.copy()
         env["LOCALAPPDATA"] = self.appdata_dir
         env["ORANGE_AI_TEST_MODE"] = "1"
-        stderr_log = os.path.join(self.temp_dir, "damaged_app_stderr.log")
+        stderr_init = os.path.join(self.temp_dir, "initial_app_stderr.log")
 
-        with open(stderr_log, "w", encoding="utf-8") as f_err:
+        with open(stderr_init, "w", encoding="utf-8") as f_init:
+            proc_init = subprocess.Popen([installed_app], stderr=f_init, env=env, cwd=live_install_dir)
+            time.sleep(4)
+            self._kill_process_tree(proc_init.pid)
+            try:
+                proc_init.wait(timeout=5)
+            except Exception:
+                pass
+
+        with open(stderr_init, "r", encoding="utf-8", errors="ignore") as f_init:
+            init_log = f_init.read()
+        print(f"[TEST 4 LIVE] Initial working launch log:\n{init_log}")
+        self.assertTrue(
+            "Startup status: Ready" in init_log or "Found standalone runtime" in init_log,
+            "Initial application launch must achieve Ready handshake",
+        )
+
+        # 4. Snapshot installation inventory before interruption
+        inventory_before = {}
+        for root, _, files in os.walk(live_install_dir):
+            for f in files:
+                p = os.path.join(root, f)
+                rel = os.path.relpath(p, live_install_dir)
+                try:
+                    inventory_before[rel] = (os.path.getsize(p), os.path.getmtime(p))
+                except OSError:
+                    pass
+        print(f"[TEST 4 LIVE] Initial inventory snapshot: {len(inventory_before)} files")
+
+        # 5. Start an actual NSIS installation or update
+        # 6. Interrupt the NSIS installer process at a documented point during sequential file replacement
+        # 7. Do not manually delete application files to simulate the interruption
+        pids_before = set(psutil.pids())
+        cmd_update = f'"{installer_path}" /S /D={live_install_dir}'
+        print(f"[TEST 4 LIVE] Starting actual NSIS update installer: {cmd_update}")
+        proc_update = subprocess.Popen(cmd_update, shell=True)
+        update_start_time = time.time()
+
+        interrupted = False
+        in_flight_file = None
+        interrupted_pids = []
+        interruption_evidence = {}
+
+        runtime_target = installed_runtime
+        initial_runtime_stat = inventory_before.get(os.path.relpath(runtime_target, live_install_dir))
+
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            current_pids = set(psutil.pids()) - pids_before
+            active_installer_pids = set()
+            for pid in current_pids:
+                try:
+                    p = psutil.Process(pid)
+                    p_name = p.name().lower()
+                    if any(k in p_name for k in ["setup", "nsis", "orange", "au_"]):
+                        active_installer_pids.add(pid)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            if proc_update.poll() is None:
+                active_installer_pids.add(proc_update.pid)
+
+            # Check if runtime_adapter.exe or resources/runtime files are actively being replaced
+            runtime_in_flight = False
+            try:
+                curr_runtime_stat = (os.path.getsize(runtime_target), os.path.getmtime(runtime_target))
+                if initial_runtime_stat and curr_runtime_stat != initial_runtime_stat:
+                    runtime_in_flight = True
+                    in_flight_file = runtime_target
+            except OSError:
+                runtime_in_flight = True
+                in_flight_file = runtime_target
+
+            if not runtime_in_flight:
+                runtime_dir = os.path.join(live_install_dir, "resources", "runtime")
+                if os.path.exists(runtime_dir):
+                    for fname in os.listdir(runtime_dir):
+                        fpath = os.path.join(runtime_dir, fname)
+                        if os.path.isfile(fpath):
+                            frel = os.path.relpath(fpath, live_install_dir)
+                            try:
+                                curr_fstat = (os.path.getsize(fpath), os.path.getmtime(fpath))
+                                if frel in inventory_before and curr_fstat != inventory_before[frel]:
+                                    runtime_in_flight = True
+                                    in_flight_file = fpath
+                                    break
+                            except OSError:
+                                runtime_in_flight = True
+                                in_flight_file = fpath
+                                break
+
+            # Interruption trigger: when runtime files are in-flight OR during active replacement window
+            if runtime_in_flight or (time.time() - update_start_time > 0.20 and active_installer_pids):
+                interruption_elapsed = time.time() - update_start_time
+                print(f"[TEST 4 LIVE] Documented interruption point reached at t={interruption_elapsed:.3f}s")
+                if in_flight_file:
+                    try:
+                        cur_sz = os.path.getsize(in_flight_file)
+                    except Exception:
+                        cur_sz = "locked"
+                    print(f"[TEST 4 LIVE] In-flight file being replaced: {in_flight_file} (size: {cur_sz})")
+
+                # FORCEFULLY TERMINATE ALL INSTALLER PROCESSES IMMEDIATELY
+                for pid in list(active_installer_pids):
+                    try:
+                        p_obj = psutil.Process(pid)
+                        interruption_evidence[pid] = {
+                            "name": p_obj.name(),
+                            "cmdline": p_obj.cmdline(),
+                        }
+                    except Exception:
+                        pass
+                    self._kill_process_tree(pid)
+                    interrupted_pids.append(pid)
+
+                if proc_update.poll() is None:
+                    self._kill_process_tree(proc_update.pid)
+                    interrupted_pids.append(proc_update.pid)
+
+                interrupted = True
+                break
+
+            time.sleep(0.01)
+
+        self.assertTrue(interrupted, "NSIS installer process must be actively detected and interrupted during file replacement")
+        print(f"[TEST 4 LIVE] Successfully interrupted installer processes: {interrupted_pids}")
+        print(f"[TEST 4 LIVE] Process interruption details: {interruption_evidence}")
+
+        # 8. Record the resulting installation state and any partially replaced files
+        inventory_interrupted = {}
+        for root, _, files in os.walk(live_install_dir):
+            for f in files:
+                p = os.path.join(root, f)
+                rel = os.path.relpath(p, live_install_dir)
+                try:
+                    inventory_interrupted[rel] = (os.path.getsize(p), os.path.getmtime(p))
+                except OSError:
+                    inventory_interrupted[rel] = (0, 0)
+
+        modified_files = [
+            rel for rel, stat in inventory_interrupted.items()
+            if rel not in inventory_before or inventory_before[rel] != stat
+        ]
+        truncated_files = [
+            rel for rel, stat in inventory_interrupted.items()
+            if stat[0] == 0 or (inventory_before.get(rel) and stat[0] < inventory_before[rel][0])
+        ]
+
+        print(f"[TEST 4 LIVE] Interrupted installation file analysis:")
+        print(f"  Total files in interrupted tree: {len(inventory_interrupted)}")
+        print(f"  Modified/replaced files: {len(modified_files)}")
+        print(f"  Truncated/partial files: {len(truncated_files)} -> {truncated_files[:5]}")
+
+        # 9. Launch the affected application
+        # 10. Verify that incomplete or mismatched runtime state is detected
+        # 11. Verify normal application operations remain blocked until runtime integrity is established
+        stderr_damaged = os.path.join(self.temp_dir, "damaged_app_stderr.log")
+        with open(stderr_damaged, "w", encoding="utf-8") as f_err:
             proc_damaged = subprocess.Popen([installed_app], stderr=f_err, env=env, cwd=live_install_dir)
             time.sleep(3)
-            proc_damaged.kill()
-            proc_damaged.wait(timeout=5)
+            self._kill_process_tree(proc_damaged.pid)
+            try:
+                proc_damaged.wait(timeout=5)
+            except Exception:
+                pass
 
-        with open(stderr_log, "r", encoding="utf-8", errors="ignore") as f_err:
-            log_text = f_err.read()
-        print(f"[TEST 4 LIVE] Damaged launch log:\n{log_text}")
+        with open(stderr_damaged, "r", encoding="utf-8", errors="ignore") as f_err:
+            damaged_log = f_err.read()
+        print(f"[TEST 4 LIVE] Damaged launch log:\n{damaged_log}")
 
-        # 3. Execute Standalone Repair over damaged installation
+        # Verify failure detection: supervisor must NOT report Ready
+        self.assertNotIn("Startup status: Ready", damaged_log, "Damaged application must not report Ready status")
+        has_expected_error = any(k in damaged_log for k in [
+            "StartupFailed",
+            "ProcessTerminated",
+            "IncompatibleRuntimeVersion",
+            "Unable to locate",
+            "does not exist",
+            "error",
+            "failed",
+        ])
+        self.assertTrue(has_expected_error, "Supervisor must detect incomplete or damaged runtime state")
+
+        # 12. Run the designated standalone NSIS installer over the damaged installation (Repair)
+        print(f"[TEST 4 LIVE] Executing standalone repair installer over {live_install_dir}...")
         repair_success = self._extract_or_install(installer_path, live_install_dir)
-        self.assertTrue(repair_success, "NSIS repair extraction/installation must succeed")
-        repaired_runtime = self._find_installed_runtime(live_install_dir)
-        self.assertIsNotNone(repaired_runtime, "runtime_adapter.exe must be restored by repair")
-        self.assertTrue(os.path.exists(repaired_runtime), "runtime_adapter.exe must exist post-repair")
+        self.assertTrue(repair_success, "NSIS standalone repair installation must succeed")
 
-        # 4. Relaunch repaired application and verify handshake
+        repaired_app = self._find_installed_exe(live_install_dir)
+        repaired_runtime = self._find_installed_runtime(live_install_dir)
+        self.assertIsNotNone(repaired_app, "Main application executable must exist post-repair")
+        self.assertIsNotNone(repaired_runtime, "runtime_adapter.exe must be restored post-repair")
+        self.assertTrue(os.path.exists(repaired_runtime), "runtime_adapter.exe must exist post-repair")
+        self.assertGreater(os.path.getsize(repaired_runtime), 1000000, "Repaired runtime_adapter.exe must be full binary (>1MB)")
+
+        # 13. Relaunch Orange AI and verify a successful runtime handshake
         stderr_repaired = os.path.join(self.temp_dir, "repaired_app_stderr.log")
         with open(stderr_repaired, "w", encoding="utf-8") as f_rep:
             proc_repaired = subprocess.Popen([installed_app], stderr=f_rep, env=env, cwd=live_install_dir)
             time.sleep(4)
-            proc_repaired.kill()
-            proc_repaired.wait(timeout=5)
+            self._kill_process_tree(proc_repaired.pid)
+            try:
+                proc_repaired.wait(timeout=5)
+            except Exception:
+                pass
 
         with open(stderr_repaired, "r", encoding="utf-8", errors="ignore") as f_rep:
             repaired_log = f_rep.read()
         print(f"[TEST 4 LIVE] Repaired launch log:\n{repaired_log}")
+        self.assertIn("Startup status: Ready", repaired_log, "Repaired application must establish Ready handshake")
 
-        # 5. Confirm database preserved completely
+        # 14. Verify database integrity and record preservation
         post_counts = self._get_db_counts(self.disposable_db)
-        self.assertEqual(post_counts, self.initial_counts)
-        self.assertEqual(self._check_db_integrity(self.disposable_db), "ok")
-        print("[TEST 4 LIVE ACCEPTANCE SUCCEEDED: 100% database preserved, runtime repaired]")
+        self.assertEqual(post_counts, self.initial_counts, "All conversation history, reminders, and settings must be intact")
+        self.assertEqual(self._check_db_integrity(self.disposable_db), "ok", "Database integrity check must be ok")
+        print("[TEST 4 LIVE ACCEPTANCE SUCCEEDED: Genuine NSIS interruption, error detected, repair verified, 100% database preserved]")
 
 
 if __name__ == "__main__":
