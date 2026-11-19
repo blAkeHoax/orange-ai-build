@@ -71,6 +71,7 @@ def main():
         latest_json_path = os.path.join(os.path.dirname(updater_sig), "latest.json")
         with open(updater_sig, "r", encoding="utf-8") as f:
             sig_raw = f.read().strip()
+        payload_filename = os.path.basename(updater_payload).replace(" ", ".")
         manifest_data = {
             "version": "2.0.0",
             "notes": "Orange AI Desktop 2.0.0 official production release",
@@ -78,7 +79,7 @@ def main():
             "platforms": {
                 "windows-x86_64": {
                     "signature": sig_raw,
-                    "url": f"https://github.com/blAkeHoax/orange-ai/releases/download/v2.0.0/{os.path.basename(updater_payload)}"
+                    "url": f"https://github.com/blAkeHoax/orange-ai/releases/download/v2.0.0/{payload_filename}"
                 }
             }
         }

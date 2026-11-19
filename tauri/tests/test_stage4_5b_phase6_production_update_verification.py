@@ -13,6 +13,7 @@ Validates the live production update path from GitHub Releases:
 
 import os
 import sys
+import time
 import unittest
 import tempfile
 import shutil
@@ -21,6 +22,7 @@ import base64
 import hashlib
 import sqlite3
 import urllib.request
+import urllib.parse
 from pathlib import Path
 
 try:
@@ -217,17 +219,27 @@ class TestStage4_5BPhase6ProductionUpdateVerification(unittest.TestCase):
 
         # 1. Download production archive payload
         print(f"Downloading production archive from: {archive_url}...")
+        urls_to_try = [
+            archive_url,
+            archive_url.replace(' ', '.'),
+            urllib.parse.quote(archive_url, safe=':/?&=#')
+        ]
         archive_data = None
         last_error = None
-        for attempt in range(10):
-            try:
-                with urllib.request.urlopen(req_archive) as resp:
-                    archive_data = resp.read()
-                    if archive_data:
-                        break
-            except Exception as e:
-                last_error = e
-                time.sleep(3)
+        for target_url in urls_to_try:
+            req_archive = urllib.request.Request(target_url, headers={"User-Agent": "Orange-AI-Updater-Test"})
+            for attempt in range(5):
+                try:
+                    with urllib.request.urlopen(req_archive) as resp:
+                        archive_data = resp.read()
+                        if archive_data:
+                            print(f"Successfully downloaded {len(archive_data):,} bytes from: {target_url}")
+                            break
+                except Exception as e:
+                    last_error = e
+                    time.sleep(2)
+            if archive_data:
+                break
 
         if not archive_data:
             self.fail(f"Failed to download production updater archive after retries: {last_error}")

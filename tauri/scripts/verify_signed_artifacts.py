@@ -87,7 +87,7 @@ def main():
     if not json_cands:
         # Generate updater manifest latest.json alongside the updater payload
         latest_json_path = os.path.join(os.path.dirname(updater_sig), "latest.json")
-        payload_filename = os.path.basename(updater_payload)
+        payload_filename = os.path.basename(updater_payload).replace(" ", ".")
         manifest_data = {
             "version": app_version,
             "notes": f"Orange AI Desktop {app_version} official production release",
