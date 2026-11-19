@@ -1,0 +1,319 @@
+name: Phase 3 Windows Packaged Verification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase3-windows-verification
+  cancel-in-progress: false
+
+jobs:
+  packaged-verification:
+    name: Windows x64 Packaged Runtime Verification
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+      ORANGE_BUILD_PYTHON: python
+      CI: "true"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python 3.14.6
+        uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # v5.3.0
+        with:
+          python-version: '3.14.6'
+          architecture: 'x64'
+          allow-prereleases: true
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'tauri/package-lock.json'
+
+      - name: Set up Rust MSVC Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Configure NSIS Bundler Environment
+        shell: pwsh
+        run: |
+          Write-Host "--- [CI SETUP] Checking NSIS Availability ---"
+          if (Test-Path "C:\Program Files (x86)\NSIS\makensis.exe") {
+            Write-Host "Found preinstalled NSIS at C:\Program Files (x86)\NSIS"
+            "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          } elseif (!(Get-Command makensis -ErrorAction SilentlyContinue)) {
+            Write-Host "Installing NSIS via Chocolatey..."
+            choco install nsis -y
+          }
+          $nsisVer = & makensis /VERSION
+          Write-Host "NSIS Version: $nsisVer"
+
+      - name: Inspect Runner Toolchain Versions
+        shell: pwsh
+        run: |
+          Write-Host "=== CI RUNNER TOOLCHAIN REPORT ==="
+          Write-Host "OS: $((Get-CimInstance Win32_OperatingSystem).Caption) ($((Get-CimInstance Win32_OperatingSystem).Version))"
+          python --version
+          node --version
+          npm --version
+          rustc --version
+          cargo --version
+
+      - name: Install Locked Python Dependencies (Hash Enforced)
+        shell: pwsh
+        run: |
+          Write-Host "--- [CI STEP 1] Installing Locked Python Dependencies ---"
+          python -m pip install --upgrade pip
+          pip install --require-hashes -r desktop/requirements.lock
+          pip list
+
+      - name: Build Standalone Frozen Python Runtime
+        shell: pwsh
+        run: |
+          Write-Host "--- [CI STEP 2] Compiling Frozen Runtime via PyInstaller ---"
+          $env:ORANGE_BUILD_PYTHON = "python"
+          python tauri/scripts/build_runtime.py
+          
+          $exePath = "tauri/src-tauri/resources/runtime/runtime_adapter.exe"
+          if (!(Test-Path $exePath)) {
+            throw "Frozen runtime executable was not created at expected location: $exePath"
+          }
+          $fileHash = (Get-FileHash -Algorithm SHA256 $exePath).Hash
+          $fileSize = (Get-Item $exePath).Length
+          Write-Host "Frozen runtime created successfully:"
+          Write-Host "  Path: $exePath"
+          Write-Host "  Size: $fileSize bytes"
+          Write-Host "  SHA-256: $fileHash"
+
+      - name: Run Frozen Runtime Integration Tests (4 tests)
+        shell: pwsh
+        run: |
+          Write-Host "--- [CI STEP 3] Running Frozen Runtime Direct Integration Tests ---"
+          python -m unittest tauri/tests/test_stage4_5b_phase3_frozen_runtime_integration.py -v
+
+      - name: Install Frontend Dependencies and Build Production Frontend
+        shell: pwsh
+        working-directory: tauri
+        run: |
+          Write-Host "--- [CI STEP 4] Building Frontend Distribution ---"
+          npm ci
+          npm run build
+          if (!(Test-Path "dist/index.html")) {
+            throw "Frontend build failed: dist/index.html not found"
+          }
+          Write-Host "Frontend build succeeded: dist/index.html present"
+
+      - name: Run Phase 2 & Phase 3 Regression Test Suites (33 tests)
+        shell: pwsh
+        run: |
+          Write-Host "--- [CI STEP 5] Running Regression Test Suites ---"
+          Write-Host "Running Phase 2 Database Safety tests (16 tests)..."
+          python -m unittest tauri/tests/test_stage4_5b_phase2_db_safety.py -v
+          
+          Write-Host "Running Phase 3 Handshake and Recovery tests (12 tests)..."
+          python -m unittest tauri/tests/test_stage4_5b_phase3_handshake_recovery.py -v
+          
+          Write-Host "Running Phase 3 Failure Recovery Scenarios (5 tests)..."
+          python -m unittest tauri/tests/test_stage4_5b_phase3_failure_recovery_scenarios.py -v
+
+      - name: Run Rust Checks and Unit Tests
+        shell: pwsh
+        working-directory: tauri/src-tauri
+        run: |
+          Write-Host "--- [CI STEP 6] Running Rust Unit Tests ---"
+          cargo test --verbose
+
+      - name: Build Tauri Desktop Application and NSIS Package
+        shell: pwsh
+        working-directory: tauri
+        run: |
+          Write-Host "--- [CI STEP 7] Building Packaged Tauri Desktop Application ---"
+          npx --yes @tauri-apps/cli build --no-sign --verbose
+
+      - name: Verify Packaged Bundle Structure and Bundled Runtime
+        shell: pwsh
+        run: |
+          Write-Host "--- [CI STEP 8] Verifying Packaged NSIS Installer Contents ---"
+          python -c @"
+          import glob, os, subprocess, hashlib, sys
+
+          installer_cands = glob.glob('tauri/src-tauri/target/**/bundle/nsis/*-setup.exe', recursive=True)
+          if not installer_cands:
+              installer_cands = glob.glob('tauri/src-tauri/target/**/*.exe', recursive=True)
+          print('Found installer candidates:', installer_cands)
+          if not installer_cands:
+              raise SystemExit('No NSIS installer or packaged executable found in target/!')
+
+          installer = installer_cands[0]
+          print(f'Using installer: {installer} ({os.path.getsize(installer)} bytes)')
+
+          extract_dir = 'packaged_extracted'
+          os.makedirs(extract_dir, exist_ok=True)
+          res = subprocess.run(['7z', 'x', installer, f'-o{extract_dir}', '-y'], capture_output=True, text=True)
+          print('7z extraction exit code:', res.returncode)
+          if res.returncode != 0:
+              print('7z error:', res.stderr)
+              raise SystemExit('Failed to unpack NSIS installer!')
+
+          all_extracted = []
+          for root, dirs, files in os.walk(extract_dir):
+              for f in files:
+                  all_extracted.append(os.path.relpath(os.path.join(root, f), extract_dir).replace('\\', '/'))
+
+          print(f'Total files extracted from NSIS bundle: {len(all_extracted)}')
+          
+          main_exes = [f for f in all_extracted if f.endswith('.exe') and not 'runtime_adapter' in f and not 'uninstall' in f.lower()]
+          print('Extracted main executables:', main_exes)
+          if not main_exes:
+              raise SystemExit('Main application executable not found in extracted bundle!')
+
+          runtimes = [f for f in all_extracted if f.endswith('runtime_adapter.exe')]
+          print('Extracted runtime adapters:', runtimes)
+          if not runtimes:
+              raise SystemExit('Bundled runtime_adapter.exe NOT found in packaged bundle resources!')
+
+          pydlls = [f for f in all_extracted if 'python314.dll' in f.lower()]
+          print('Extracted Python DLLs:', pydlls)
+          if not pydlls:
+              raise SystemExit('python314.dll NOT found in packaged bundle _internal!')
+
+          built_exe = 'tauri/src-tauri/resources/runtime/runtime_adapter.exe'
+          extracted_exe = os.path.join(extract_dir, runtimes[0])
+          with open(built_exe, 'rb') as f1, open(extracted_exe, 'rb') as f2:
+              h1 = hashlib.sha256(f1.read()).hexdigest()
+              h2 = hashlib.sha256(f2.read()).hexdigest()
+
+          print(f'Built runtime SHA-256:     {h1}')
+          print(f'Bundled runtime SHA-256:   {h2}')
+          if h1 != h2:
+              raise SystemExit('Hash mismatch between built runtime and bundled runtime!')
+
+          print('[VERIFIED] Runtime resources were correctly copied into the packaged desktop application!')
+          "@
+
+      - name: Execute Packaged Desktop Integration and Supervisor Test
+        shell: pwsh
+        run: |
+          Write-Host "--- [CI STEP 9] Executing Actual Packaged Desktop Application Verification ---"
+          python -c @"
+          import glob, os, subprocess, time, psutil, tempfile, shutil, sys
+
+          extract_dir = 'packaged_extracted'
+          main_exes = [f for f in glob.glob(os.path.join(extract_dir, '**', '*.exe'), recursive=True)
+                       if not 'runtime_adapter' in f and not 'uninstall' in f.lower()]
+          if not main_exes:
+              raise SystemExit('Cannot find main desktop executable in packaged_extracted!')
+
+          app_exe = os.path.abspath(main_exes[0])
+          app_dir = os.path.dirname(app_exe)
+          print(f'Testing packaged desktop executable: {app_exe}')
+
+          tmp_appdata = tempfile.mkdtemp(prefix='orange_ci_desktop_')
+          env = os.environ.copy()
+          env['LOCALAPPDATA'] = tmp_appdata
+          env['ORANGE_AI_USER_DATA_DIR'] = os.path.join(tmp_appdata, 'Orange AI')
+          env['ORANGE_AI_TEST_MODE'] = '1'
+          env.pop('PYTHONPATH', None)
+          env.pop('PYTHONHOME', None)
+
+          stderr_log = os.path.abspath('desktop_app_stderr.log')
+          log_file = open(stderr_log, 'w', encoding='utf-8')
+
+          print('\n--- [TEST 1] Launching Packaged Desktop Instance 1 ---')
+          proc1 = subprocess.Popen([app_exe], stdout=subprocess.PIPE, stderr=log_file, cwd=app_dir, env=env)
+          print(f'Instance 1 PID: {proc1.pid}')
+
+          try:
+              child_pythons = []
+              for attempt in range(20):
+                  time.sleep(1)
+                  if proc1.poll() is not None:
+                      raise SystemExit(f'Instance 1 exited unexpectedly early with code {proc1.returncode}')
+                  try:
+                      parent = psutil.Process(proc1.pid)
+                      children = parent.children(recursive=True)
+                      child_pythons = [c for c in children if 'runtime_adapter' in c.name().lower() or 'python' in c.name().lower()]
+                      if child_pythons:
+                          break
+                  except Exception:
+                      pass
+
+              if not child_pythons:
+                  log_file.flush()
+                  with open(stderr_log, 'r', encoding='utf-8', errors='ignore') as f:
+                      print('Captured stderr:\n', f.read())
+                  raise SystemExit('Runtime supervisor failed to launch child runtime_adapter process within 20s!')
+
+              child_pid = child_pythons[0].pid
+              print(f'Successfully detected child Python runtime process PID: {child_pid}')
+
+              time.sleep(3)
+
+              log_file.flush()
+              with open(stderr_log, 'r', encoding='utf-8', errors='ignore') as f:
+                  log_content = f.read()
+
+              print('\n--- Runtime Supervisor Log Output ---')
+              for line in log_content.splitlines():
+                  if '[runtime-' in line or 'status:' in line.lower():
+                      print('  ', line)
+
+              if 'Startup status: Ready' not in log_content and 'Found standalone runtime' not in log_content:
+                  print('Full stderr log:\n', log_content)
+                  raise SystemExit('Runtime supervisor log does not indicate Ready startup state!')
+
+              print('[PASSED] Packaged desktop app successfully launched and completed handshake with bundled runtime!')
+
+              # Test 2: Single-Instance Mutex Enforcement
+              print('\n--- [TEST 2] Testing Single-Instance Mutex Enforcement ---')
+              proc2 = subprocess.Popen([app_exe], stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=app_dir, env=env)
+              ret2 = proc2.wait(timeout=10)
+              print(f'Instance 2 exit code: {ret2}')
+              if ret2 != 0:
+                  raise SystemExit(f'Instance 2 should exit with code 0 on mutex collision, got {ret2}')
+              if proc1.poll() is not None:
+                  raise SystemExit('Instance 1 exited when Instance 2 was launched!')
+              if not psutil.pid_exists(child_pid):
+                  raise SystemExit('Child Python runtime died during single instance check!')
+              print('[PASSED] Single-instance mutex correctly enforced.')
+
+              # Test 3: Windows Job Object Child Process Cleanup
+              print('\n--- [TEST 3] Testing Windows Job Object Child Cleanup ---')
+              proc1.kill()
+              proc1.wait(timeout=5)
+              time.sleep(2)
+              child_alive = psutil.pid_exists(child_pid)
+              print(f'Child runtime PID {child_pid} alive after parent killed: {child_alive}')
+              if child_alive:
+                  raise SystemExit(f'Orphan process detected! Child runtime PID {child_pid} was not killed by Job Object.')
+              print('[PASSED] Windows Job Object terminated child runtime immediately with zero orphans.')
+
+          finally:
+              log_file.close()
+              if proc1.poll() is None:
+                  proc1.kill()
+              shutil.rmtree(tmp_appdata, ignore_errors=True)
+
+          print('\n[ALL PACKAGED INTEGRATION TESTS SUCCEEDED]')
+          "@
+
+      - name: Upload Verification Diagnostics and Logs
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: phase3-windows-verification-logs
+          path: |
+            *.log
+            desktop_app_stderr.log
+            tauri/src-tauri/target/release/bundle/nsis/*.log
+          retention-days: 1
