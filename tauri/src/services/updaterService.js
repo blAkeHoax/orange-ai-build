@@ -183,6 +183,9 @@ export async function checkForUpdates(options = {}) {
           if (fixture.downloadError) {
             throw new Error(fixture.downloadError);
           }
+          if (typeof fixture.download === 'function') {
+            return await fixture.download(onProgress);
+          }
           if (onProgress) {
             onProgress({ event: 'Started', data: { contentLength: this.totalBytes } });
             const chunks = 5;

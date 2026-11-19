@@ -120,7 +120,7 @@ jobs:
           }
           Write-Host "Frontend build succeeded: dist/index.html present"
 
-      - name: Run Phase 2, Phase 3 & Phase 4 Regression Test Suites (51 tests)
+      - name: Run Phase 2, 3, 4 & 5 Regression and Mock Server Suites (89 tests)
         shell: pwsh
         run: |
           Write-Host "--- [CI STEP 5] Running Regression Test Suites ---"
@@ -138,6 +138,15 @@ jobs:
 
           Write-Host "Running Phase 4 Python Runtime Integration tests (5 tests)..."
           python -m unittest tauri/tests/test_stage4_5b_phase4_updater_integration.py -v
+
+          Write-Host "Running Phase 5 Mock Server Unit tests (15 tests)..."
+          python -m unittest tauri/tests/test_stage4_5b_phase5_mock_server.py -v
+
+          Write-Host "Running Phase 5 Option 1 Lifecycle & Recovery tests (18 tests)..."
+          node tauri/tests/test_stage4_5b_phase5_updater_lifecycle.js
+
+          Write-Host "Running Phase 5 Test 4 Unit tests (5 tests)..."
+          python -m unittest tauri/tests/test_stage4_5b_phase5_interrupted_nsis_repair.py -v
 
       - name: Run Rust Checks and Unit Tests
         shell: pwsh
@@ -324,6 +333,12 @@ jobs:
 
           print('\n[ALL PACKAGED INTEGRATION TESTS SUCCEEDED]')
           "@
+
+      - name: Execute Live Empirical Test 4 (Interrupted NSIS Installation & Standalone Repair)
+        shell: pwsh
+        run: |
+          Write-Host "--- [CI STEP 10] Executing Mandatory Acceptance Test 4 (Live NSIS Interruption & Repair) ---"
+          python -m unittest tauri/tests/test_stage4_5b_phase5_interrupted_nsis_repair.py -v
 
       - name: Upload Verification Diagnostics and Logs
         if: always()
