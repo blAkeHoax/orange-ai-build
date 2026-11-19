@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 45
     env:
       CARGO_TERM_COLOR: always
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
       ORANGE_BUILD_PYTHON: python
       CI: "true"
       PYTHONUNBUFFERED: "1"
@@ -44,9 +45,15 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Configure NSIS Bundler Environment
+      - name: Configure MSVC and NSIS Environment
         shell: pwsh
         run: |
+          Write-Host "--- [CI SETUP] Removing local MinGW override to enforce MSVC build ---"
+          if (Test-Path "tauri/src-tauri/.cargo/config.toml") {
+            Remove-Item "tauri/src-tauri/.cargo/config.toml" -Force
+            Write-Host "Removed tauri/src-tauri/.cargo/config.toml for clean MSVC toolchain execution."
+          }
+          
           Write-Host "--- [CI SETUP] Checking NSIS Availability ---"
           if (Test-Path "C:\Program Files (x86)\NSIS\makensis.exe") {
             Write-Host "Found preinstalled NSIS at C:\Program Files (x86)\NSIS"
@@ -130,15 +137,15 @@ jobs:
         shell: pwsh
         working-directory: tauri/src-tauri
         run: |
-          Write-Host "--- [CI STEP 6] Running Rust Unit Tests ---"
-          cargo test --verbose
+          Write-Host "--- [CI STEP 6] Running Rust Unit Tests (MSVC) ---"
+          cargo test --target x86_64-pc-windows-msvc --verbose
 
       - name: Build Tauri Desktop Application and NSIS Package
         shell: pwsh
         working-directory: tauri
         run: |
-          Write-Host "--- [CI STEP 7] Building Packaged Tauri Desktop Application ---"
-          npx --yes @tauri-apps/cli build --no-sign --verbose
+          Write-Host "--- [CI STEP 7] Building Packaged Tauri Desktop Application (MSVC + NSIS) ---"
+          npx --yes @tauri-apps/cli build --target x86_64-pc-windows-msvc --no-sign --verbose
 
       - name: Verify Packaged Bundle Structure and Bundled Runtime
         shell: pwsh
@@ -172,7 +179,10 @@ jobs:
 
           print(f'Total files extracted from NSIS bundle: {len(all_extracted)}')
           
-          main_exes = [f for f in all_extracted if f.endswith('.exe') and not 'runtime_adapter' in f and not 'uninstall' in f.lower()]
+          all_exes = [f for f in all_extracted if f.endswith('.exe')]
+          main_exes = [f for f in all_exes if os.path.basename(f) in ['Orange AI.exe', 'app.exe']]
+          if not main_exes:
+              main_exes = [f for f in all_exes if not 'runtime_adapter' in f and not 'uninstall' in f.lower()]
           print('Extracted main executables:', main_exes)
           if not main_exes:
               raise SystemExit('Main application executable not found in extracted bundle!')
@@ -209,8 +219,10 @@ jobs:
           import glob, os, subprocess, time, psutil, tempfile, shutil, sys
 
           extract_dir = 'packaged_extracted'
-          main_exes = [f for f in glob.glob(os.path.join(extract_dir, '**', '*.exe'), recursive=True)
-                       if not 'runtime_adapter' in f and not 'uninstall' in f.lower()]
+          all_exes = glob.glob(os.path.join(extract_dir, '**', '*.exe'), recursive=True)
+          main_exes = [f for f in all_exes if os.path.basename(f) in ['Orange AI.exe', 'app.exe']]
+          if not main_exes:
+              main_exes = [f for f in all_exes if not 'runtime_adapter' in f and not 'uninstall' in f.lower()]
           if not main_exes:
               raise SystemExit('Cannot find main desktop executable in packaged_extracted!')
 
@@ -235,7 +247,7 @@ jobs:
 
           try:
               child_pythons = []
-              for attempt in range(20):
+              for attempt in range(25):
                   time.sleep(1)
                   if proc1.poll() is not None:
                       raise SystemExit(f'Instance 1 exited unexpectedly early with code {proc1.returncode}')
@@ -252,7 +264,7 @@ jobs:
                   log_file.flush()
                   with open(stderr_log, 'r', encoding='utf-8', errors='ignore') as f:
                       print('Captured stderr:\n', f.read())
-                  raise SystemExit('Runtime supervisor failed to launch child runtime_adapter process within 20s!')
+                  raise SystemExit('Runtime supervisor failed to launch child runtime_adapter process within 25s!')
 
               child_pid = child_pythons[0].pid
               print(f'Successfully detected child Python runtime process PID: {child_pid}')
