@@ -231,7 +231,7 @@ class TestStage4_5BPhase5InterruptedNsisRepair(unittest.TestCase):
 
         start_time = time.time()
         while time.time() - start_time < 30:
-            if self._find_installed_exe(dest_dir):
+            if self._find_installed_runtime(dest_dir):
                 return True
             time.sleep(1)
         return False
@@ -452,14 +452,24 @@ class TestStage4_5BPhase5InterruptedNsisRepair(unittest.TestCase):
             app_extracted = self._find_installed_exe(live_install_dir)
             runtime_dir = os.path.join(live_install_dir, "resources", "runtime")
             runtime_files = os.listdir(runtime_dir) if os.path.exists(runtime_dir) else []
+            runtime_adapter = os.path.join(runtime_dir, "runtime_adapter.exe")
 
             # Documented interruption point:
-            # Main application executable is extracted, and sequential extraction of runtime files has begun
-            if (app_extracted and len(runtime_files) > 0) or (time.time() - install_start_time > 0.25 and active_installer_pids):
+            # Main application executable is extracted and non-empty (>100KB),
+            # sequential extraction of runtime files has begun into resources/runtime,
+            # but runtime_adapter.exe has NOT yet been extracted.
+            app_ready = False
+            if app_extracted:
+                try:
+                    app_ready = os.path.getsize(app_extracted) > 100000
+                except OSError:
+                    app_ready = False
+
+            if app_ready and (len(runtime_files) > 0 or os.path.exists(runtime_dir)) and not os.path.exists(runtime_adapter):
                 interruption_elapsed = time.time() - install_start_time
                 print(f"[TEST 4 LIVE] Documented interruption point reached at t={interruption_elapsed:.3f}s")
                 in_flight_files = runtime_files[:10]
-                print(f"[TEST 4 LIVE] Sequential extraction active in resources/runtime: {len(runtime_files)} files written so far: {in_flight_files}")
+                print(f"[TEST 4 LIVE] Sequential extraction active in resources/runtime: {len(runtime_files)} entries found so far: {in_flight_files}")
 
                 # FORCEFULLY TERMINATE ALL INSTALLER PROCESSES IMMEDIATELY
                 for pid in list(active_installer_pids):
