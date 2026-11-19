@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Home,
   MessageSquare,
@@ -14,6 +14,7 @@ import {
   Radio
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
+import { subscribeToUpdater } from '../services/updaterService';
 import orbImg from '../assets/logo_orb_64.png';
 import '../styles/NavigationDrawer.css';
 
@@ -37,6 +38,12 @@ export default function NavigationDrawer({
   runtimePid
 }) {
   const { theme, toggleTheme } = useTheme();
+  const [updaterState, setUpdaterState] = useState(null);
+
+  useEffect(() => {
+    const unsub = subscribeToUpdater(setUpdaterState);
+    return () => unsub();
+  }, []);
 
   // Close on Escape key
   useEffect(() => {
@@ -104,7 +111,12 @@ export default function NavigationDrawer({
                       <Icon size={18} />
                     </span>
                     <span className="drawer-nav-label-group">
-                      <span className="drawer-nav-label">{item.label}</span>
+                      <span className="drawer-nav-label">
+                        {item.label}
+                        {item.id === 'settings' && updaterState?.hasUpdateAvailable && (
+                          <span className="drawer-update-dot" title="Update available" />
+                        )}
+                      </span>
                       <span className="drawer-nav-desc">{item.description}</span>
                     </span>
                     {isActive && <span className="drawer-active-indicator" />}

@@ -1,11 +1,18 @@
-import React from 'react';
-import { Minus, Square, X, Sun, Moon } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Minus, Square, X, Sun, Moon, Download } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { minimizeWindow, toggleMaximizeWindow, closeWindow } from '../services/tauriBridge';
+import { subscribeToUpdater, openUpdateModal } from '../services/updaterService';
 import '../styles/TitleBar.css';
 
 export default function TitleBar({ onToggleTheme }) {
   const { theme, toggleTheme } = useTheme();
+  const [updaterState, setUpdaterState] = useState(null);
+
+  useEffect(() => {
+    const unsub = subscribeToUpdater(setUpdaterState);
+    return () => unsub();
+  }, []);
 
   const handleMinimize = (e) => {
     e.stopPropagation();
@@ -40,6 +47,18 @@ export default function TitleBar({ onToggleTheme }) {
       <div className="titlebar-center" data-tauri-drag-region></div>
 
       <div className="titlebar-right">
+        {updaterState?.hasUpdateAvailable && (
+          <button
+            className="titlebar-update-btn"
+            onClick={openUpdateModal}
+            title={updaterState?.isDownloaded ? 'Update ready to install' : `Update available (v${updaterState.targetVersion})`}
+            type="button"
+          >
+            <Download size={11} />
+            <span>Update</span>
+          </button>
+        )}
+
         <button
           className="titlebar-theme-btn"
           onClick={handleThemeToggle}

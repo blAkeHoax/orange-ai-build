@@ -57,6 +57,27 @@
   color: var(--color-orange);
 }
 
+.titlebar-update-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--color-orange-subtle);
+  border: 1px solid rgba(255, 107, 0, 0.4);
+  color: var(--color-orange);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  margin-right: 8px;
+  transition: all var(--transition-fast);
+}
+
+.titlebar-update-btn:hover {
+  background: var(--color-orange);
+  color: #FFFFFF;
+}
+
 .titlebar-control-btn {
   background: transparent;
   border: none;

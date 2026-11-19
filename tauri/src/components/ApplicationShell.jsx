@@ -6,6 +6,7 @@ import WorkspaceContainer from './WorkspaceContainer';
 import ConfirmationModal from './ConfirmationModal';
 import NotificationToast from './NotificationToast';
 import BriefingModal from './BriefingModal';
+import UpdateModal from './UpdateModal';
 import {
   sendMessage,
   confirmAction,
@@ -17,6 +18,13 @@ import {
   getLatestBriefing,
   getLatestReconciliations
 } from '../services/tauriBridge';
+import {
+  subscribeToUpdater,
+  startPeriodicChecks,
+  stopPeriodicChecks,
+  openUpdateModal,
+  UpdateStatus
+} from '../services/updaterService';
 import '../styles/ApplicationShell.css';
 
 export default function ApplicationShell() {
@@ -29,6 +37,32 @@ export default function ApplicationShell() {
   const [runtimePid, setRuntimePid] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const [briefingModal, setBriefingModal] = useState(null);
+  const [updaterState, setUpdaterState] = useState(null);
+
+  // Stage 4.5B Phase 4: Subscribe to updater service and initiate non-intrusive periodic checks
+  useEffect(() => {
+    const unsub = subscribeToUpdater((state) => {
+      setUpdaterState(state);
+      if (state.status === UpdateStatus.UPDATE_AVAILABLE) {
+        addNotification({
+          id: `update_${state.targetVersion}`,
+          event_id: `update_${state.targetVersion}`,
+          event_type: 'update.available',
+          title: 'Software Update Available',
+          message: `Orange AI v${state.targetVersion} is ready to download. Click to review changelog.`,
+          payload: state,
+          created_at: new Date().toISOString()
+        });
+      }
+    });
+
+    startPeriodicChecks();
+
+    return () => {
+      unsub();
+      stopPeriodicChecks();
+    };
+  }, []);
 
   const addNotification = (item) => {
     setNotifications((prev) => {
@@ -256,6 +290,9 @@ export default function ApplicationShell() {
     } else if (item.event_type === 'reconciliation.ready' || item.event_type === 'reconciliation_ready') {
       setActiveView('activity');
       setNotifications((prev) => prev.filter((n) => (n.event_id || n.id) !== (item.event_id || item.id)));
+    } else if (item.event_type === 'update.available') {
+      openUpdateModal();
+      setNotifications((prev) => prev.filter((n) => (n.event_id || n.id) !== (item.event_id || item.id)));
     }
   };
 
@@ -422,6 +459,9 @@ export default function ApplicationShell() {
         confirmation={confirmation}
         onConfirm={handleConfirmDecision}
       />
+
+      {/* Option 1 Updater Modal */}
+      <UpdateModal updaterState={updaterState} />
     </div>
   );
 }

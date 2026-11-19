@@ -18,10 +18,19 @@ import {
   Edit3,
   Save,
   X,
-  Check
+  Check,
+  Download
 } from 'lucide-react';
 import { pingAdapter, getHealth, getSettings, updateSettings } from '../../services/tauriBridge';
 import { useTheme } from '../../context/ThemeContext';
+import {
+  subscribeToUpdater,
+  checkForUpdates,
+  downloadUpdate,
+  installAndRestart,
+  openUpdateModal,
+  UpdateStatus
+} from '../../services/updaterService';
 import '../../styles/SecondaryViews.css';
 
 // Approved 4-NVIDIA-Model foundation
@@ -85,6 +94,18 @@ export default function SettingsView() {
   const [urlError, setUrlError] = useState('');
   const [urlStatusMsg, setUrlStatusMsg] = useState('');
   const [savingUrl, setSavingUrl] = useState(false);
+
+  // Stage 4.5B Phase 4: Updater State
+  const [updaterState, setUpupdaterState] = useState(null);
+
+  useEffect(() => {
+    const unsub = subscribeToUpdater(setUpdaterState);
+    return () => unsub();
+  }, []);
+
+  const handleManualCheckUpdates = async () => {
+    await checkForUpdates({ silent: false });
+  };
 
   const fetchSettingsAndStatus = async () => {
     setLoading(true);
@@ -735,6 +756,82 @@ export default function SettingsView() {
               <span className="path-label">Python Supervisor PID:</span>
               <code>{runtimeInfo?.pid || 'active'}</code>
             </div>
+          </div>
+        </div>
+
+        {/* ============================================================== */}
+        {/* SECTION 7: Software Updates & System Integrity (Stage 4.5B)      */}
+        {/* ============================================================== */}
+        <div className="settings-section-card">
+          <div className="section-card-header">
+            <Download size={18} className="text-orange" />
+            <div className="section-card-title-group">
+              <span className="section-card-title">Software Updates & System Integrity</span>
+              {updaterState?.hasUpdateAvailable && (
+                <span className="section-status-pill text-orange">Update Available</span>
+              )}
+            </div>
+          </div>
+          <p className="section-card-desc">
+            Manage Orange AI desktop updates. Updates adhere to the Option 1 lifecycle: never downloaded or installed automatically, held in session memory only, and verified against SQLite WAL truncate checkpoints before installation.
+          </p>
+
+          <div className="storage-paths-list" style={{ marginBottom: 16 }}>
+            <div className="storage-path-row">
+              <span className="path-label">Current Version:</span>
+              <code>v{updaterState?.currentVersion || '2.0.0'}</code>
+            </div>
+            <div className="storage-path-row">
+              <span className="path-label">Update Status:</span>
+              <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>
+                {updaterState?.status === UpdateStatus.CHECKING && 'Checking for updates...'}
+                {updaterState?.status === UpdateStatus.UP_TO_DATE && '✓ Up to date'}
+                {[UpdateStatus.UPDATE_AVAILABLE, UpdateStatus.DEFERRED_UNFETCHED].includes(updaterState?.status) && `Update available: v${updaterState.targetVersion} (Awaiting download approval)`}
+                {updaterState?.status === UpdateStatus.DOWNLOADING && `Downloading v${updaterState.targetVersion} (${updaterState.percent}%)...`}
+                {[UpdateStatus.DOWNLOADED_SESSION_STAGED, UpdateStatus.DEFERRED_SESSION_STAGED].includes(updaterState?.status) && `v${updaterState.targetVersion} ready to install (Session-staged)`}
+                {updaterState?.status === UpdateStatus.PREPARING_INSTALL && 'Preparing database checkpoint...'}
+                {updaterState?.status === UpdateStatus.INSTALL_ERROR && 'Update aborted (Database safe)'}
+                {updaterState?.status === UpdateStatus.CHECK_ERROR && 'Check failed'}
+                {(!updaterState || updaterState?.status === UpdateStatus.IDLE) && 'No updates checked this session'}
+              </span>
+            </div>
+            {updaterState?.lastChecked && (
+              <div className="storage-path-row">
+                <span className="path-label">Last Checked:</span>
+                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                  {new Date(updaterState.lastChecked).toLocaleTimeString()}
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button
+              className="btn-test-connection"
+              onClick={handleManualCheckUpdates}
+              disabled={updaterState?.isBusy}
+              type="button"
+            >
+              <RefreshCw size={13} className={updaterState?.status === UpdateStatus.CHECKING ? 'spinning' : ''} />
+              <span>{updaterState?.status === UpdateStatus.CHECKING ? 'Checking...' : 'Check for Updates'}</span>
+            </button>
+
+            {updaterState?.hasUpdateAvailable && (
+              <button
+                className="btn-save-endpoint"
+                onClick={openUpdateModal}
+                type="button"
+              >
+                <Download size={13} />
+                <span>
+                  {updaterState?.isDownloaded ? 'Review & Install' : 'View Update Details'}
+                </span>
+              </button>
+            )}
+          </div>
+
+          <div className="security-disclosure-box" style={{ marginTop: 16 }}>
+            <strong>Database Preservation Safeguard:</strong> All updates require your explicit confirmation before installing. Orange AI performs a SQLite WAL truncate checkpoint to guarantee all conversation turns (1–240+) and operational memories are fully committed. If the database cannot be safely quiesced, the update is immediately aborted and your data remains untouched.
           </div>
         </div>
       </div>

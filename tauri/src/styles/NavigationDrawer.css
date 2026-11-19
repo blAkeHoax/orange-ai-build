@@ -173,6 +173,17 @@
   line-height: 1.2;
 }
 
+.drawer-update-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--color-orange);
+  box-shadow: 0 0 6px var(--color-orange-glow);
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
 .drawer-nav-item.is-active .drawer-nav-label {
   font-weight: 600;
   color: var(--color-orange);

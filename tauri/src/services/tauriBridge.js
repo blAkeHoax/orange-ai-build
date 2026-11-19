@@ -99,6 +99,28 @@ export async function openOfficialReleases() {
   window.open('https://github.com/blAkeHoax/orange-ai/releases/latest', '_blank');
 }
 
+/**
+ * Pre-update SQLite database checkpoint and runtime shutdown verification gate.
+ * Invokes Rust `prepare_for_update` which executes `system.shutdown_for_update`
+ * and verifies that the database WAL sidecar is truncated to 0 bytes and safe.
+ */
+export async function prepareForUpdate(customDbPath = null) {
+  const tauri = await getTauri();
+  if (tauri) {
+    try {
+      return await tauri.core.invoke('prepare_for_update', { customDbPath });
+    } catch (err) {
+      console.error('[TauriBridge] Pre-update database safety check failed:', err);
+      throw err;
+    }
+  }
+  // Mock / preview mode fallback
+  if (typeof window !== 'undefined' && window.__mockPreUpdateFailure) {
+    throw new Error('Database WAL checkpoint busy: [1, 5, 0]');
+  }
+  return { status: 'verified', wal_bytes: 0, db_path: customDbPath || 'memory.db' };
+}
+
 // ==========================================
 // System & Health
 // ==========================================

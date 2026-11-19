@@ -120,7 +120,7 @@ jobs:
           }
           Write-Host "Frontend build succeeded: dist/index.html present"
 
-      - name: Run Phase 2 & Phase 3 Regression Test Suites (33 tests)
+      - name: Run Phase 2, Phase 3 & Phase 4 Regression Test Suites (51 tests)
         shell: pwsh
         run: |
           Write-Host "--- [CI STEP 5] Running Regression Test Suites ---"
@@ -132,6 +132,12 @@ jobs:
           
           Write-Host "Running Phase 3 Failure Recovery Scenarios (5 tests)..."
           python -m unittest tauri/tests/test_stage4_5b_phase3_failure_recovery_scenarios.py -v
+
+          Write-Host "Running Phase 4 Updater Service Node tests (13 tests)..."
+          node tauri/tests/test_stage4_5b_phase4_updater_service.js
+
+          Write-Host "Running Phase 4 Python Runtime Integration tests (5 tests)..."
+          python -m unittest tauri/tests/test_stage4_5b_phase4_updater_integration.py -v
 
       - name: Run Rust Checks and Unit Tests
         shell: pwsh
