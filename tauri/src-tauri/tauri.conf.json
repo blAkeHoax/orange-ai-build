@@ -27,7 +27,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
@@ -50,7 +52,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVDRDhFMkNERTgxOTgwRDMKUldUVGdCbm96ZUxZN05xREVRanJhRVpWV2U2ZDhRMWZ0MWRxbE5JejRXcEZLMFZlMi9xOG9PL0gK",
       "endpoints": [
         "https://github.com/blAkeHoax/orange-ai/releases/latest/download/latest.json"
       ]

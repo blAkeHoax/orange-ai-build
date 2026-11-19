@@ -155,12 +155,15 @@ jobs:
           Write-Host "--- [CI STEP 6] Running Rust Unit Tests (MSVC) ---"
           cargo test --target x86_64-pc-windows-msvc --verbose
 
-      - name: Build Tauri Desktop Application and NSIS Package
+      - name: Build Tauri Desktop Application and NSIS Package (Signed with Minisign)
         shell: pwsh
         working-directory: tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: |
-          Write-Host "--- [CI STEP 7] Building Packaged Tauri Desktop Application (MSVC + NSIS) ---"
-          npx --yes @tauri-apps/cli build --target x86_64-pc-windows-msvc --no-sign --verbose
+          Write-Host "--- [CI STEP 7] Building Packaged Tauri Desktop Application (MSVC + NSIS + Signed) ---"
+          npx --yes @tauri-apps/cli build --target x86_64-pc-windows-msvc --verbose
 
       - name: Verify Packaged Bundle Structure and Bundled Runtime
         shell: pwsh
@@ -225,6 +228,13 @@ jobs:
 
           print('[VERIFIED] Runtime resources were correctly copied into the packaged desktop application!')
           "@
+
+      - name: Verify Signed Updater Artifacts and Minisign Signatures (Gate 3)
+        shell: pwsh
+        run: |
+          Write-Host "--- [CI STEP] Gate 3: Verifying Signed Production Build Artifacts ---"
+          pip install pynacl
+          python tauri/scripts/verify_signed_artifacts.py
 
       - name: Execute Packaged Desktop Integration and Supervisor Test
         shell: pwsh
@@ -339,6 +349,32 @@ jobs:
         run: |
           Write-Host "--- [CI STEP 10] Executing Mandatory Acceptance Test 4 (Live NSIS Interruption & Repair) ---"
           python -m unittest tauri/tests/test_stage4_5b_phase5_interrupted_nsis_repair.py -v
+
+      - name: Publish Production Release to blAkeHoax/orange-ai (Gate 4)
+        shell: pwsh
+        env:
+          DISTRIBUTION_TOKEN: ${{ secrets.DISTRIBUTION_TOKEN }}
+        run: |
+          Write-Host "--- [CI STEP] Gate 4: Publishing Production Release v2.0.0 ---"
+          python tauri/scripts/publish_production_release.py
+
+      - name: Execute Production Update Verification Suite (Gate 5)
+        shell: pwsh
+        run: |
+          Write-Host "--- [CI STEP] Gate 5: Production Update Verification ---"
+          python -m unittest tauri/tests/test_stage4_5b_phase6_production_update_verification.py -v
+
+      - name: Upload Production Release Artifact Bundle
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: orange-ai-production-release-v2.0.0
+          path: |
+            tauri/src-tauri/target/**/bundle/nsis/*-setup.exe
+            tauri/src-tauri/target/**/bundle/nsis/*.nsis.zip
+            tauri/src-tauri/target/**/bundle/nsis/*.nsis.zip.sig
+            tauri/src-tauri/target/**/latest.json
+          retention-days: 5
 
       - name: Upload Verification Diagnostics and Logs
         if: always()
