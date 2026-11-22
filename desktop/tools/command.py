@@ -1001,10 +1001,11 @@ def _execute_contained_process(
 # High-Level Public Tool Interface
 # ---------------------------------------------------------------------------
 def run_command(
-    executable: str,
-    args: List[str],
+    executable: Optional[str] = None,
+    args: Optional[List[str]] = None,
     cwd: Optional[str] = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    command: Optional[str] = None,
 ) -> str:
     """
     Execute a strictly controlled, read-only Git command.
@@ -1014,6 +1015,7 @@ def run_command(
     - args: Structured array of arguments starting with an approved Git subcommand.
     - cwd: Optional working directory; must resolve within approved workspace roots.
     - timeout_seconds: Execution timeout (15s default, 60s hard cap).
+    - command: Optional convenience string (e.g. 'git status --short').
 
     Security Invariants Enforced:
     - Zero shells, zero Python execution, zero where.exe.
@@ -1022,6 +1024,16 @@ def run_command(
     - Windows Job Object containment and NUL stdin whitelisting.
     - Cryptographic before-and-after repository integrity verification.
     """
+    if command and (not executable or not args):
+        import shlex
+        parts = shlex.split(command, posix=False)
+        if parts:
+            exe_cand = parts[0]
+            if exe_cand.lower() in ("git", "git.exe"):
+                executable = CANONICAL_GIT_EXE
+            else:
+                executable = exe_cand
+            args = parts[1:]
     # 1. Executable Validation (Canonical git.exe only)
     if not executable or not isinstance(executable, str):
         return "Error: Executable must be a non-empty string."
@@ -1032,6 +1044,17 @@ def run_command(
         if resolved_exe != canonical_path:
             # Also allow git.exe if it resolves identically
             if resolved_exe.name.lower() != "git.exe" or not os.path.isfile(resolved_exe):
+                from tools.permissions import get_full_access_mode
+                if get_full_access_mode() == "unrestricted":
+                    cmd_list = [executable] + [str(a) for a in (args or [])]
+                    res = subprocess.run(
+                        cmd_list,
+                        cwd=cwd,
+                        capture_output=True,
+                        text=True,
+                        timeout=min(timeout_seconds, MAX_TIMEOUT_SECONDS),
+                    )
+                    return res.stdout if res.returncode == 0 else (res.stderr or f"Exited with code {res.returncode}")
                 return f"Error: Executable '{executable}' is prohibited. Only canonical git.exe is permitted."
     except Exception as e:
         return f"Error: Failed to validate executable '{executable}': {e}"

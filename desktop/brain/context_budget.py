@@ -49,6 +49,7 @@ class BudgetResult:
     dropped_items: List[Dict[str, Any]] = field(default_factory=list)
     agent_relevant_memories: List[Dict[str, Any]] = field(default_factory=list)
     combined_rendered_chars: int = 0
+    active_work: str = ""
 
 
 def render_structured_profile(items: List[MemoryBudgetItem]) -> str:
@@ -152,6 +153,146 @@ def safe_bounded_fallback_profile(
     except Exception as e:
         logger.warning("Safe bounded fallback profile generation failed: %s", e)
         return ""
+
+
+def sanitize_active_work_text(text: str) -> str:
+    """Sanitize sensitive credentials, API keys, tokens, and passwords."""
+    if not text:
+        return ""
+    # Redact Bearer authorization tokens
+    s = re.sub(r"(?i)\b(Bearer\s+)[A-Za-z0-9_\-\.=/+]+", r"\g<1>[REDACTED]", text)
+    # Redact well-known API key patterns
+    s = re.sub(r"\b(?:sk|pk|ghp|gho|glpat|AKIA|AIza)[A-Za-z0-9_\-]{8,}\b", "[REDACTED]", s)
+    s = re.sub(r"\bsk-[A-Za-z0-9_\-]{8,}\b", "[REDACTED]", s)
+    # Redact credential assignments
+    s = re.sub(
+        r'(?i)\b(api[_-]?key|token|password|passwd|secret|access[_-]?token|client[_-]?secret)\s*([:=])\s*([^\s,;"]+)',
+        r"\g<1>\g<2>[REDACTED]",
+        s,
+    )
+    return s
+
+
+def build_active_work_summary(
+    conn: Optional[sqlite3.Connection] = None,
+    max_chars: int = 300,
+) -> str:
+    """
+    Build a compact active-work summary from project_reconciliations and active jobs.
+    Strictly defensive: handles missing tables (sqlite3.OperationalError) gracefully.
+    Omits section completely (returns "") if neither table has active data or only
+    terminal jobs (COMPLETED/FAILED/CANCELLED) exist.
+    Capped strictly at max_chars (default 300).
+    """
+    import json
+    from brain import memory
+
+    if conn is None:
+        conn = memory.get_connection()
+
+    recon_data = None
+    try:
+        cur = conn.execute(
+            """
+            SELECT workspace_name, git_branch, status, uncommitted_changes_json, changed_files_json
+            FROM project_reconciliations
+            ORDER BY reconciled_at DESC
+            LIMIT 1
+            """
+        )
+        row = cur.fetchone()
+        if row:
+            recon_data = {
+                "name": row[0],
+                "branch": row[1],
+                "status": row[2],
+                "uncommitted": row[3],
+                "changed": row[4],
+            }
+    except (sqlite3.OperationalError, sqlite3.DatabaseError):
+        # Table does not exist in this database
+        pass
+    except Exception as e:
+        logger.warning("Error querying project_reconciliations: %s", e)
+
+    active_jobs = []
+    try:
+        cur = conn.execute(
+            """
+            SELECT id, goal, status, priority
+            FROM jobs
+            WHERE status IN ('RUNNING', 'PAUSED', 'WAITING_CONFIRMATION')
+            ORDER BY priority DESC, updated_at DESC
+            LIMIT 3
+            """
+        )
+        for r in cur.fetchall():
+            active_jobs.append({
+                "id": r[0],
+                "goal": r[1],
+                "status": r[2],
+                "priority": r[3],
+            })
+    except (sqlite3.OperationalError, sqlite3.DatabaseError):
+        # Table does not exist in this database
+        pass
+    except Exception as e:
+        logger.warning("Error querying jobs: %s", e)
+
+    if not recon_data and not active_jobs:
+        return ""
+
+    lines = []
+    if recon_data:
+        ws_name = str(recon_data.get("name") or "").strip()
+        branch = str(recon_data.get("branch") or "").strip()
+        raw_status = str(recon_data.get("status") or "clean").strip()
+
+        details = []
+        if branch:
+            details.append(f"branch: {branch}")
+
+        uncommitted_count = 0
+        if recon_data.get("uncommitted"):
+            try:
+                u_list = json.loads(recon_data["uncommitted"])
+                if isinstance(u_list, list):
+                    uncommitted_count = len(u_list)
+            except Exception:
+                pass
+        if uncommitted_count == 0 and recon_data.get("changed"):
+            try:
+                c_list = json.loads(recon_data["changed"])
+                if isinstance(c_list, list):
+                    uncommitted_count = len(c_list)
+            except Exception:
+                pass
+
+        if raw_status.lower() == "changed" and uncommitted_count > 0:
+            details.append(f"status: changed ({uncommitted_count} uncommitted files)")
+        else:
+            details.append(f"status: {raw_status}")
+
+        details_str = ", ".join(details)
+        if ws_name:
+            lines.append(f"Workspace: {ws_name} ({details_str})")
+        else:
+            lines.append(f"Workspace: ({details_str})")
+
+    if active_jobs:
+        lines.append("Active Jobs:")
+        for j in active_jobs:
+            st = j["status"]
+            goal = str(j["goal"]).strip()
+            if len(goal) > 60:
+                goal = goal[:57] + "..."
+            lines.append(f"- [{st}] {goal}")
+
+    summary = "\n".join(lines).strip()
+    summary = sanitize_active_work_text(summary)
+    if len(summary) > max_chars:
+        summary = summary[:max_chars - 3].rstrip() + "..."
+    return summary
 
 
 def normalize_fact_text(text: str) -> str:
@@ -411,7 +552,10 @@ class ContextBudgetManager:
             active_turn=query,
         )
 
-        # 6. Safe greedy packing within self.max_chars
+        # 6. Safe greedy packing within self.max_chars with Tier 1/2 protection and bounded active work
+        raw_active_work = build_active_work_summary(conn=conn, max_chars=300)
+        active_work = ""
+
         accepted_items: List[MemoryBudgetItem] = []
         dropped_items: List[Dict[str, Any]] = []
         overflow = False
@@ -427,8 +571,12 @@ class ContextBudgetManager:
                 "chars": len(str(dropped.get("value", ""))),
             })
 
-        for cand in resolved_candidates:
-            # Test cost of candidate alone
+        # Separate candidates into Tier 1/2 (core identity & active projects) and Tier 3/4/5
+        tier12_candidates = [c for c in resolved_candidates if c.priority_tier in (1, 2)]
+        tier345_candidates = [c for c in resolved_candidates if c.priority_tier not in (1, 2)]
+
+        # First pass: Pack Tier 1 & Tier 2 candidates (guaranteed never starved by active work)
+        for cand in tier12_candidates:
             cand_alone_profile = render_structured_profile([cand]) if cand.source == "structured" else ""
             cand_alone_legacy = render_legacy_memories([cand]) if cand.source == "legacy" else ""
             cand_alone_chars = len(cand_alone_profile) + len(cand_alone_legacy)
@@ -472,13 +620,97 @@ class ContextBudgetManager:
                     "chars": cand_alone_chars,
                 })
 
+        # Second pass: Allocate bounded active work within remaining budget (up to 300 chars)
+        curr_struct = [it for it in accepted_items if it.source == "structured"]
+        curr_leg = [it for it in accepted_items if it.source == "legacy"]
+        curr_profile_str = render_structured_profile(curr_struct)
+        curr_legacy_str = render_legacy_memories(curr_leg)
+        curr_chars = len(curr_profile_str) + (len(curr_legacy_str) if curr_legacy_str else 0)
+
+        avail_for_active = self.max_chars - curr_chars
+        if raw_active_work and avail_for_active > 0:
+            allowed_active_chars = min(300, avail_for_active)
+            if len(raw_active_work) <= allowed_active_chars:
+                active_work = raw_active_work
+            elif allowed_active_chars >= 50:
+                active_work = raw_active_work[:allowed_active_chars - 3].rstrip() + "..."
+            else:
+                overflow = True
+                dropped_items.append({
+                    "source": "active_work",
+                    "category": "ACTIVE_WORK",
+                    "key": "workspace_state",
+                    "value": raw_active_work,
+                    "priority_tier": 2,
+                    "reason": "budget_exhausted",
+                    "chars": len(raw_active_work),
+                })
+        elif raw_active_work:
+            overflow = True
+            dropped_items.append({
+                "source": "active_work",
+                "category": "ACTIVE_WORK",
+                "key": "workspace_state",
+                "value": raw_active_work,
+                "priority_tier": 2,
+                "reason": "budget_exhausted",
+                "chars": len(raw_active_work),
+            })
+
+        active_work_len = len(active_work) if active_work else 0
+
+        # Third pass: Pack remaining Tier 3/4/5 candidates within remaining budget
+        for cand in tier345_candidates:
+            cand_alone_profile = render_structured_profile([cand]) if cand.source == "structured" else ""
+            cand_alone_legacy = render_legacy_memories([cand]) if cand.source == "legacy" else ""
+            cand_alone_chars = len(cand_alone_profile) + len(cand_alone_legacy)
+
+            if cand_alone_chars + active_work_len > self.max_chars:
+                overflow = True
+                dropped_items.append({
+                    "source": cand.source,
+                    "category": cand.category,
+                    "key": cand.key,
+                    "value": cand.value,
+                    "priority_tier": cand.priority_tier,
+                    "reason": "oversized_fact",
+                    "chars": cand_alone_chars,
+                })
+                continue
+
+            test_structured = [it for it in accepted_items if it.source == "structured"]
+            test_legacy = [it for it in accepted_items if it.source == "legacy"]
+
+            if cand.source == "structured":
+                test_structured.append(cand)
+            else:
+                test_legacy.append(cand)
+
+            test_profile_str = render_structured_profile(test_structured)
+            test_legacy_str = render_legacy_memories(test_legacy)
+            test_total_chars = len(test_profile_str) + (len(test_legacy_str) if test_legacy_str else 0) + active_work_len
+
+            if test_total_chars <= self.max_chars:
+                accepted_items.append(cand)
+            else:
+                overflow = True
+                dropped_items.append({
+                    "source": cand.source,
+                    "category": cand.category,
+                    "key": cand.key,
+                    "value": cand.value,
+                    "priority_tier": cand.priority_tier,
+                    "reason": "budget_exhausted",
+                    "chars": cand_alone_chars,
+                })
+
         # 7. Final rendered context and diagnostics
         final_structured = [it for it in accepted_items if it.source == "structured"]
         final_legacy = [it for it in accepted_items if it.source == "legacy"]
 
         formatted_profile = render_structured_profile(final_structured)
         formatted_legacy = render_legacy_memories(final_legacy)
-        total_chars = len(formatted_profile) + (len(formatted_legacy) if formatted_legacy else 0)
+        total_chars = len(formatted_profile) + (len(formatted_legacy) if formatted_legacy else 0) + active_work_len
 
         selected_dicts = [
             {
@@ -492,18 +724,29 @@ class ContextBudgetManager:
             }
             for it in accepted_items
         ]
+        if active_work:
+            selected_dicts.append({
+                "source": "active_work",
+                "category": "ACTIVE_WORK",
+                "key": "workspace_state",
+                "value": active_work,
+                "priority_tier": 2,
+                "relevance_score": 0.0,
+                "id": None,
+            })
 
         result = BudgetResult(
             formatted_profile=formatted_profile,
             formatted_legacy=formatted_legacy,
             total_chars=total_chars,
             max_chars=self.max_chars,
-            included_count=len(accepted_items),
+            included_count=len(accepted_items) + (1 if active_work else 0),
             dropped_count=len(dropped_items),
             overflow=overflow,
             selected_items=selected_dicts,
             dropped_items=dropped_items,
             combined_rendered_chars=total_chars,
+            active_work=active_work,
         )
 
         logger.info(

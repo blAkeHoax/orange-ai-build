@@ -14,11 +14,24 @@ from brain.paths import get_project_root
 SETTINGS_FILENAME = "gui_settings.json"
 SUPPORTED_THEMES = ("light", "dark")
 DEFAULT_THEME = "light"
+DEFAULT_SETTINGS: Dict[str, Any] = {
+    "theme": DEFAULT_THEME,
+    "hybrid_memory_extraction_enabled": True,
+    "hybrid_memory_confidence_threshold": 0.75,
+    "adaptive_empathy_enabled": True,
+    "minimize_to_tray_enabled": True,
+    "desktop_toasts_enabled": True,
+    "full_access_mode": "supervised",
+}
 
 
 def get_settings_path() -> str:
     """Return the absolute path to the UI settings file."""
-    return os.path.join(get_project_root(), SETTINGS_FILENAME)
+    p = os.path.join(get_project_root(), SETTINGS_FILENAME)
+    alt = os.path.join(get_project_root(), "settings.json")
+    if not os.path.exists(p) and os.path.exists(alt):
+        return alt
+    return p
 
 
 def load_settings() -> Dict[str, Any]:
@@ -27,18 +40,31 @@ def load_settings() -> Dict[str, Any]:
     unreadable, or contains malformed JSON.
     """
     path = get_settings_path()
+    res = dict(DEFAULT_SETTINGS)
     if not os.path.exists(path):
-        return {"theme": DEFAULT_THEME}
+        return res
 
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
             if not isinstance(data, dict):
-                return {"theme": DEFAULT_THEME}
-            return data
+                return res
+            res.update(data)
+            if isinstance(data.get("hybrid_memory_extraction_enabled"), bool):
+                res["hybrid_memory_extraction_enabled"] = data["hybrid_memory_extraction_enabled"]
+            if isinstance(data.get("adaptive_empathy_enabled"), bool):
+                res["adaptive_empathy_enabled"] = data["adaptive_empathy_enabled"]
+            if "hybrid_memory_confidence_threshold" in data:
+                try:
+                    res["hybrid_memory_confidence_threshold"] = max(0.5, min(1.0, float(data["hybrid_memory_confidence_threshold"])))
+                except (ValueError, TypeError):
+                    pass
+            if data.get("full_access_mode") in ("supervised", "unrestricted"):
+                res["full_access_mode"] = data["full_access_mode"]
+            return res
     except Exception:
         # Graceful fallback on corrupt, partial, or locked files
-        return {"theme": DEFAULT_THEME}
+        return res
 
 
 def save_settings(settings: Dict[str, Any]) -> bool:

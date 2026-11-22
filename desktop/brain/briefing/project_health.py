@@ -211,6 +211,30 @@ def evaluate_project_health(
                 if comp_dt >= recent_cutoff:
                     has_recent_progress = True
 
+    # Stage 5D: Check Git repository commit timestamps for verified progress
+    try:
+        from tools.permissions import DEFAULT_ACTIVE_WORKSPACES
+        import subprocess
+        for ws in DEFAULT_ACTIVE_WORKSPACES:
+            p_name = Path(ws).name.lower()
+            if p_name in project_name.lower() or project_name.lower() in p_name:
+                res = subprocess.run(
+                    ["git", "-C", ws, "log", "-1", "--format=%cI"],
+                    capture_output=True,
+                    text=True,
+                    timeout=1.5,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    git_dt = parse_timestamp(res.stdout.strip())
+                    if git_dt and git_dt <= skew_cutoff:
+                        if latest_progress_dt is None or git_dt > latest_progress_dt:
+                            latest_progress_dt = git_dt
+                            latest_progress_str = res.stdout.strip()
+                        if git_dt >= recent_cutoff:
+                            has_recent_progress = True
+    except Exception:
+        pass
+
     # -------------------------------------------------------------
     # Running Job Warning Check (> 24h with no progress)
     # -------------------------------------------------------------

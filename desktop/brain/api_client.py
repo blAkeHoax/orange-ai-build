@@ -45,7 +45,7 @@ class OrangeAPIClient:
     HTTP client for the Orange API backend.
     """
 
-    def __init__(self, api_url: Optional[str] = None):
+    def __init__(self, api_url: Optional[str] = None, api_key: Optional[str] = None):
         if not api_url:
             env_url = os.environ.get("ORANGE_API_URL")
             if env_url:
@@ -60,6 +60,11 @@ class OrangeAPIClient:
                     pass
         raw_url = api_url or DEFAULT_ORANGE_API_URL
         self.api_url = raw_url.rstrip("/")
+
+        if api_key is not None:
+            self.api_key = str(api_key).strip()
+        else:
+            self.api_key = os.environ.get("ORANGE_API_KEY", "").strip()
 
     def is_available(self, timeout: float = 1.0) -> bool:
         """
@@ -122,8 +127,8 @@ class OrangeAPIClient:
             payload["system_instruction"] = system_instruction
         if provider:
             payload["provider"] = provider
-        if model:
-            payload["model"] = model
+        if model and model.strip() and model.strip().lower() != "auto":
+            payload["model"] = model.strip()
         if task_type:
             payload["task_type"] = task_type
         if modalities is not None:
@@ -135,13 +140,17 @@ class OrangeAPIClient:
             logger.error("Failed to serialize assist request: %s", e)
             raise OrangeAPIResponseError("Failed to serialize request payload.") from e
 
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "OrangeAIDesktop/1.0",
+        }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
         req = urllib.request.Request(
             url,
             data=body_bytes,
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": "OrangeAIDesktop/1.0",
-            },
+            headers=headers,
             method="POST",
         )
 
@@ -187,6 +196,14 @@ class OrangeAPIClient:
                 safe_detail = safe_detail[:500] + "... [truncated]"
 
             logger.warning("Orange API HTTP error %d: %s", e.code, safe_detail)
+            if e.code == 401:
+                auth_msg = (
+                    f"Orange API authentication failed (HTTP 401): {safe_detail}. "
+                    "Please check your ORANGE_API_KEY configuration."
+                    if safe_detail
+                    else "Orange API authentication failed (HTTP 401). Please check your ORANGE_API_KEY configuration."
+                )
+                raise OrangeAPIResponseError(auth_msg) from e
             if safe_detail:
                 raise OrangeAPIResponseError(f"Orange API error ({e.code}): {safe_detail}") from e
             raise OrangeAPIResponseError(f"Orange API error: HTTP {e.code}.") from e

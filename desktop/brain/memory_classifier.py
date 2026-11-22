@@ -29,9 +29,16 @@ Output:
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+from datetime import datetime
+from typing import List, Dict, Optional, Any, Tuple
 
-from typing import List, Dict
+try:
+    from brain.logger import logger
+except Exception:
+    import logging
+    logger = logging.getLogger("memory_classifier")
 
 
 # ==========================================================
@@ -907,6 +914,322 @@ def has_memory(text: str) -> bool:
     """
 
     return len(classify_memory(text)) > 0
+
+
+# ==========================================================
+# REA CONVERSATIONAL & COGNITIVE STATE ENGINE (STAGE 5B)
+# ==========================================================
+
+_MOMENTUM_EXCITEMENT_PATTERNS = [
+    re.compile(r"\b(it\s+worked|works\s+now|fixed\s+it|finally\s+got\s+it|finally|shipped|passed|100%|awesome|nailed\s+it|woohoo|yay|hurray|congrats|great\s+job|celebrate|huge\s+success|all\s+green)\b", re.IGNORECASE),
+]
+
+_FRICTION_FRUSTRATION_PATTERNS = [
+    re.compile(r"\b(still\s+failing|not\s+working|stuck|again|broken|traceback|syntaxerror|typeerror|attributeerror|importerror|modulenotfounderror|valueerror|runtimeerror|fatal|exception|crash|crashed|keeps\s+failing|still\s+broken|why\s+is\s+this\s+failing|won't\s+work|wont\s+work|doesn't\s+work|does\s+not\s+work|ugh|damn|annoying|frustrated|failing\s+again|error\s+code)\b", re.IGNORECASE),
+]
+
+_FATIGUE_PATTERNS = [
+    re.compile(r"\b(tired|exhausted|sleepy|drained|late\s+night|calling\s+it\s+a\s+night|brain\s+fried|need\s+to\s+sleep|going\s+to\s+bed|need\s+sleep)\b", re.IGNORECASE),
+]
+
+_FAST_SKIP_ACK_WORDS = {
+    "ok", "okay", "thanks", "thank you", "thx", "ty", "k", "cool", "got it", "yes", "no", "yep", "nope",
+    "hi", "hello", "hey", "bye", "goodbye", "cya", "sure", "alright", "great"
+}
+
+
+def detect_conversational_state(
+    user_message: str,
+    recent_turns: Optional[List[Dict[str, Any]]] = None,
+    prior_state: Optional[Dict[str, Any]] = None,
+    current_hour: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Ultra-fast local conversational and cognitive state detector (< 2ms, zero network calls).
+    Evaluates:
+      - Friction & Frustration cues (tracebacks, repeated errors, failure keywords, rapid retries)
+      - Cognitive Load & Fatigue cues (late night hours 0-4, high error density, terse follow-ups)
+      - Momentum / Excitement cues (milestone markers: 'it worked', 'finally', 'shipped', 'passed')
+      - Prior Session State blending unless message shows a clear emotional shift.
+
+    Returns:
+      {
+        "emotional_tone": "calm | focused | frustrated | fatigued | excited",
+        "cognitive_load": "low | high",
+        "preferred_pacing": "direct_fix | collaborative_brainstorm | concise_check_in",
+        "empathy_cue": "concise 1-line situational note"
+      }
+    """
+    msg = (user_message or "").strip()
+    msg_lower = msg.lower()
+
+    if current_hour is None:
+        current_hour = datetime.now().hour
+
+    is_late_night = (0 <= current_hour < 5)
+
+    # 1. Evaluate explicit message patterns
+    has_excitement = any(p.search(msg_lower) for p in _MOMENTUM_EXCITEMENT_PATTERNS)
+    has_friction = any(p.search(msg_lower) for p in _FRICTION_FRUSTRATION_PATTERNS)
+    has_fatigue = any(p.search(msg_lower) for p in _FATIGUE_PATTERNS)
+
+    # Check for repeated errors or tracebacks in recent turns
+    recent_error_count = 0
+    recent_assistant_errors = 0
+    if recent_turns:
+        for turn in recent_turns[-6:]:
+            role = turn.get("role", "")
+            content = str(turn.get("content", "")).lower()
+            if role == "assistant" and ("error" in content or "failed" in content or "traceback" in content):
+                recent_assistant_errors += 1
+            if role == "user" and any(p.search(content) for p in _FRICTION_FRUSTRATION_PATTERNS):
+                recent_error_count += 1
+
+    # Check for terse under-specified follow-ups after errors
+    is_terse_followup = (len(msg_lower.split()) <= 4 and (recent_error_count > 0 or recent_assistant_errors > 0))
+
+    # Priority 1: Clear Excitement / Milestone
+    if has_excitement and not has_friction:
+        return {
+            "emotional_tone": "excited",
+            "cognitive_load": "low",
+            "preferred_pacing": "collaborative_brainstorm",
+            "empathy_cue": "User achieved a milestone or successful resolution; momentum is high.",
+        }
+
+    # Priority 2: Friction & Frustration
+    if has_friction or (recent_error_count >= 2 and not has_excitement):
+        return {
+            "emotional_tone": "frustrated",
+            "cognitive_load": "high",
+            "preferred_pacing": "direct_fix",
+            "empathy_cue": "User is encountering repeated technical errors or friction; requires root-cause fix.",
+        }
+
+    # Priority 3: Fatigue / Late-Night / Cognitive Overload
+    if has_fatigue or is_late_night or (is_terse_followup and recent_assistant_errors >= 2):
+        return {
+            "emotional_tone": "fatigued",
+            "cognitive_load": "high",
+            "preferred_pacing": "concise_check_in",
+            "empathy_cue": "Late hours or elevated cognitive fatigue detected; keep interactions concise and low-friction.",
+        }
+
+    # Priority 4: Blend prior state if no explicit shift in current message
+    if prior_state and isinstance(prior_state, dict):
+        prior_tone = prior_state.get("emotional_tone")
+        if prior_tone in ("frustrated", "fatigued") and not (has_excitement or "thanks" in msg_lower or "great" in msg_lower):
+            return {
+                "emotional_tone": prior_tone,
+                "cognitive_load": prior_state.get("cognitive_load", "high"),
+                "preferred_pacing": prior_state.get("preferred_pacing", "direct_fix"),
+                "empathy_cue": prior_state.get("empathy_cue", "Continuing with previous conversational calibration."),
+            }
+        elif prior_tone == "excited" and not (has_friction or has_fatigue):
+            return {
+                "emotional_tone": "focused",
+                "cognitive_load": "low",
+                "preferred_pacing": "collaborative_brainstorm",
+                "empathy_cue": "Riding momentum into the next development step.",
+            }
+
+    # Priority 5: Default Calm & Focused Peer Collaborator
+    is_dense_technical = len(msg) > 120 or any(kw in msg_lower for kw in ("implement", "function", "class", "refactor", "algorithm", "database", "schema", "architecture"))
+    return {
+        "emotional_tone": "focused" if is_dense_technical else "calm",
+        "cognitive_load": "low",
+        "preferred_pacing": "collaborative_brainstorm" if is_dense_technical else "direct_fix",
+        "empathy_cue": "User is composed and focused; standard peer-engineering collaboration.",
+    }
+
+
+def build_adaptive_style_directive(state: Dict[str, Any]) -> str:
+    """
+    Converts conversational/cognitive state into a concise, grounded behavioral directive
+    appended to system_instruction before invoking api_client.assist(...).
+    """
+    if not isinstance(state, dict):
+        return "Respond as a sharp, grounded peer collaborator—clear, direct, and proportional to task complexity."
+
+    tone = state.get("emotional_tone", "calm")
+    load = state.get("cognitive_load", "low")
+
+    if tone == "frustrated" or (load == "high" and tone not in ("fatigued", "excited")):
+        return "User is hitting friction. Acknowledge briefly in one grounded sentence without cheerleading, skip filler, and lead immediately with the exact root-cause fix."
+
+    if tone == "fatigued":
+        return "Keep response crisp, scannable, and low-friction; avoid walls of options and offer to queue non-urgent items for tomorrow."
+
+    if tone == "excited":
+        return "Match the user's momentum, validate the win concretely, and highlight the immediate next step."
+
+    # Default for "focused", "calm", or other states:
+    return "Respond as a sharp, grounded peer collaborator—clear, direct, and proportional to task complexity."
+
+
+def extract_memories_and_state_hybrid(
+    user_message: str,
+    api_client: Any,
+    recent_turns: Optional[List[Dict[str, Any]]] = None,
+    min_confidence: float = 0.75,
+) -> Dict[str, Any]:
+    """
+    Parallel hybrid extractor using MiniMax M3.1 Flash (task_type='structured_output')
+    to extract durable structured_memories and refine conversational_state.
+    
+    Guarantees:
+      - Pre-filter: Skips empty, slash commands, or trivial 1-2 word acknowledgments.
+      - Strips markdown fences, parses JSON safely.
+      - Normalizes category/key (snake_case, max 64 chars).
+      - Clamps confidence to [0.0, 1.0] and filters below min_confidence.
+      - Catches any network/JSON error gracefully ({"memories": [], "conversational_state": None}).
+    """
+    text = (user_message or "").strip()
+    if not text or text.startswith("/"):
+        return {"memories": [], "conversational_state": None}
+
+    # Fast skip on trivial 1-2 word acknowledgments
+    tokens = text.lower().split()
+    if len(tokens) <= 2 and " ".join(tokens) in _FAST_SKIP_ACK_WORDS:
+        return {"memories": [], "conversational_state": None}
+
+    if api_client is None:
+        return {"memories": [], "conversational_state": None}
+
+    system_instruction = (
+        "You are an expert memory extraction and conversational state calibration engine.\n"
+        "Analyze the user's message and recent turns to extract durable long-term memories and conversational state.\n"
+        "Return ONLY a strict raw JSON object with NO markdown formatting, backticks, or preamble:\n"
+        "{\n"
+        '  "memories": [\n'
+        '    {\n'
+        '      "action": "store" | "retire",\n'
+        '      "category": "project | preference | tool | goal | personal | workflow",\n'
+        '      "key": "snake_case_identifier",\n'
+        '      "value": "concise factual value",\n'
+        '      "confidence": 0.88\n'
+        '    }\n'
+        '  ],\n'
+        '  "conversational_state": {\n'
+        '    "emotional_tone": "calm | focused | frustrated | fatigued | excited",\n'
+        '    "cognitive_load": "low | high",\n'
+        '    "preferred_pacing": "direct_fix | collaborative_brainstorm | concise_check_in",\n'
+        '    "empathy_cue": "short explanation of user state"\n'
+        '  }\n'
+        "}"
+    )
+
+    history_payload = []
+    if recent_turns:
+        for t in recent_turns[-4:]:
+            history_payload.append({
+                "role": t.get("role", "user"),
+                "content": str(t.get("content", ""))[:500]
+            })
+
+    try:
+        resp = api_client.assist(
+            message=text,
+            history=history_payload,
+            system_instruction=system_instruction,
+            task_type="structured_output",
+            model="minimaxai/minimax-m3.1-flash",
+            timeout=15.0,
+        )
+        raw_reply = resp.get("reply", "")
+        cleaned = raw_reply.strip()
+
+        # Strip markdown fences if returned
+        if "```" in cleaned:
+            match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned)
+            if match:
+                cleaned = match.group(1).strip()
+            else:
+                cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
+                cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+
+        # Find first '{' and last '}'
+        start_idx = cleaned.find("{")
+        end_idx = cleaned.rfind("}")
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            cleaned = cleaned[start_idx:end_idx + 1]
+
+        data = json.loads(cleaned)
+        if not isinstance(data, dict):
+            return {"memories": [], "conversational_state": None}
+
+        # Validate and normalize memories
+        raw_memories = data.get("memories", [])
+        valid_memories = []
+        if isinstance(raw_memories, list):
+            for item in raw_memories:
+                if not isinstance(item, dict):
+                    continue
+                action = str(item.get("action", "store")).strip().lower()
+                if action not in ("store", "retire"):
+                    action = "store"
+
+                raw_cat = str(item.get("category", "personal")).strip()
+                cat = _slugify_key(raw_cat, max_chars=64) or "personal"
+
+                raw_k = str(item.get("key", "")).strip()
+                key = _slugify_key(raw_k, max_chars=64)
+                if not key:
+                    continue
+
+                val = str(item.get("value", "")).strip()
+                if action == "store" and not val:
+                    continue
+
+                try:
+                    conf = float(item.get("confidence", 0.8))
+                except (ValueError, TypeError):
+                    conf = 0.8
+                conf = max(0.0, min(1.0, conf))
+
+                if conf < min_confidence:
+                    continue
+
+                valid_memories.append({
+                    "action": action,
+                    "category": cat,
+                    "key": key,
+                    "value": val,
+                    "confidence": conf,
+                })
+
+        # Validate conversational_state
+        raw_state = data.get("conversational_state")
+        valid_state = None
+        if isinstance(raw_state, dict):
+            tone = str(raw_state.get("emotional_tone", "calm")).strip().lower()
+            if tone not in ("calm", "focused", "frustrated", "fatigued", "excited"):
+                tone = "calm"
+
+            load = str(raw_state.get("cognitive_load", "low")).strip().lower()
+            if load not in ("low", "high"):
+                load = "low"
+
+            pacing = str(raw_state.get("preferred_pacing", "collaborative_brainstorm")).strip().lower()
+            if pacing not in ("direct_fix", "collaborative_brainstorm", "concise_check_in"):
+                pacing = "collaborative_brainstorm"
+
+            cue = str(raw_state.get("empathy_cue", "")).strip()
+
+            valid_state = {
+                "emotional_tone": tone,
+                "cognitive_load": load,
+                "preferred_pacing": pacing,
+                "empathy_cue": cue,
+            }
+
+        return {
+            "memories": valid_memories,
+            "conversational_state": valid_state,
+        }
+    except Exception as e:
+        logger.warning("Hybrid memory extraction failed gracefully: %s", e)
+        return {"memories": [], "conversational_state": None}
 
 
 # ==========================================================

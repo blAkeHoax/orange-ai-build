@@ -122,3 +122,45 @@ def open_folder(path: str) -> str:
 
     except Exception as e:
         return f"Error: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Direct Application Launch Control (Stage 5D)
+# ---------------------------------------------------------------------------
+
+def launch_app(target: str, args: str | list[str] | None = None) -> str:
+    """
+    Launch any application or executable with optional arguments across all local drives.
+    """
+    if not target or not isinstance(target, str) or not target.strip():
+        return "Error: Target must be a non-empty string."
+
+    target_str = target.strip()
+    cmd = [target_str]
+    if args:
+        if isinstance(args, list):
+            cmd.extend([str(a) for a in args])
+        elif isinstance(args, str):
+            cmd.append(args)
+
+    from tools.permissions import is_catastrophic_command
+    full_cmd = " ".join(cmd)
+    is_cat, cat_reason = is_catastrophic_command(full_cmd)
+    if is_cat:
+        return f"Action blocked: {cat_reason}"
+
+    try:
+        subprocess.Popen(cmd, shell=False)
+        return f"Successfully launched '{target_str}'."
+    except FileNotFoundError:
+        resolved = shutil.which(target_str) or _find_installed_app(target_str)
+        if resolved:
+            try:
+                cmd[0] = resolved
+                subprocess.Popen(cmd, shell=False)
+                return f"Successfully launched '{target_str}' ({resolved})."
+            except Exception as e:
+                return f"Error launching '{target_str}': {e}"
+        return f"Error: Application or executable '{target_str}' not found."
+    except Exception as e:
+        return f"Error launching '{target_str}': {e}"

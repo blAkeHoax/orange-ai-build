@@ -3,6 +3,7 @@ import os
 import io
 import re
 import contextlib
+import subprocess
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Callable, Dict, Any, List
 
@@ -24,7 +25,13 @@ from brain.api_client import (
     OrangeAPIResponseError,
     OrangeAPIError,
 )
-from brain.memory_classifier import classify_memory
+from concurrent.futures import ThreadPoolExecutor
+from brain.memory_classifier import (
+    classify_memory,
+    detect_conversational_state,
+    build_adaptive_style_directive,
+    extract_memories_and_state_hybrid,
+)
 from brain.memory import (
     remember,
     recall,
@@ -65,10 +72,31 @@ MAX_HISTORY_TURNS = 40
 active_plan = None
 api_client = None
 agent_engine = None
+_session_conversational_state: Optional[Dict[str, Any]] = None
 
 job_store = None
 job_runtime = None
 job_manager = None
+
+
+def reset_session() -> None:
+    """Reset the current in-memory conversation history and session conversational state."""
+    global history, _session_conversational_state
+    if isinstance(history, list):
+        history.clear()
+    _session_conversational_state = None
+
+
+def _get_setting(key: str, default: Any = None) -> Any:
+    """Safely retrieve a persisted setting from gui.settings with fallback."""
+    try:
+        from gui.settings import load_settings
+        conf = load_settings()
+        if isinstance(conf, dict) and key in conf:
+            return conf[key]
+    except Exception:
+        pass
+    return default
 
 
 def get_job_manager() -> JobManager:
@@ -597,51 +625,150 @@ def ensure_initialized():
         job_manager = get_job_manager()
 
 
+def gather_silent_preflight_context(user_text: str) -> str:
+    """
+    REA Silent Pre-Flight Context:
+    When a user turn references local repositories, builds, git, or active projects
+    (Orange AI, CreatorPulse, MUCCA, DesiOps, CA Chaser) without pasting status logs,
+    run a fast read-only local check (git status --short and latest commit timestamp)
+    so Orange AI enters the turn aware of branch state and uncommitted changes.
+    """
+    if not user_text:
+        return ""
+
+    lowered = user_text.lower()
+    keywords = [
+        "orange ai", "creatorpulse", "mucca", "desiops", "ca chaser",
+        "git", "repo", "repository", "branch", "commit", "uncommitted",
+        "build", "test", "workspace", "codebase", "diff", "status"
+    ]
+
+    if not any(k in lowered for k in keywords):
+        return ""
+
+    # If the user already pasted git logs/status in their prompt, skip silent check
+    if "## " in user_text or "fatal:" in user_text or "on branch" in lowered or "changes not staged" in lowered:
+        return ""
+
+    target_repos = [
+        ("Orange AI Desktop", r"D:\Orange AI\Orange AI Desktop"),
+        ("Orange AI Tauri", r"D:\Orange AI\Orange AI Tauri"),
+        ("Orange API", r"D:\Orange AI\Orange API"),
+        ("CreatorPulse", r"D:\CreatorPulse"),
+    ]
+
+    lines = []
+    for name, repo_path in target_repos:
+        if not os.path.exists(repo_path) or not os.path.isdir(repo_path):
+            continue
+        dot_git = os.path.join(repo_path, ".git")
+        if not os.path.exists(dot_git):
+            continue
+
+        try:
+            branch_proc = subprocess.run(
+                ["git", "-C", repo_path, "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=1.5,
+            )
+            branch = branch_proc.stdout.strip() if branch_proc.returncode == 0 else "unknown"
+
+            log_proc = subprocess.run(
+                ["git", "-C", repo_path, "log", "-1", "--format=%h - %s (%cr)"],
+                capture_output=True,
+                text=True,
+                timeout=1.5,
+            )
+            latest_commit = log_proc.stdout.strip() if log_proc.returncode == 0 else "none"
+
+            status_proc = subprocess.run(
+                ["git", "-C", repo_path, "status", "--short"],
+                capture_output=True,
+                text=True,
+                timeout=1.5,
+            )
+            status_output = status_proc.stdout.strip() if status_proc.returncode == 0 else ""
+            status_summary = f"{len(status_output.splitlines())} uncommitted changes" if status_output else "clean"
+
+            lines.append(f"[{name}] branch: {branch} | state: {status_summary} | last commit: {latest_commit}")
+        except Exception:
+            continue
+
+    return "\n".join(lines)
+
+
 def process_user_turn(
     user_input: str,
     prompt_fn: Optional[Callable[[str], str]] = None,
+    attachment_context: Optional[str] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Execute one complete user turn through Orange AI's multi-tier assistant engine.
     Safe for both CLI and GUI callers; accepts an optional prompt_fn to avoid blocking on stdin.
     """
     ensure_initialized()
-    global history, api_client, agent_engine, job_manager, active_plan
+    global history, api_client, agent_engine, job_manager, active_plan, _session_conversational_state
 
     user = user_input.strip()
     if not user:
-        return {"reply": "", "model": "system", "type": "empty"}
+        if attachments or attachment_context:
+            user = "Analyze the attached file(s)."
+        else:
+            return {"reply": "", "model": "system", "type": "empty", "learned": [], "retired": [], "conversational_state": _session_conversational_state}
+
+    if not attachment_context and attachments:
+        from brain.attachments import format_attachments_for_prompt
+        attachment_context = format_attachments_for_prompt(attachments)
+
+    # Pre-Turn Signal Detection (< 2ms)
+    active_state = detect_conversational_state(
+        user,
+        recent_turns=history,
+        prior_state=_session_conversational_state,
+    )
+    if _session_conversational_state is None:
+        _session_conversational_state = active_state
+
+    adaptive_empathy_enabled = bool(_get_setting("adaptive_empathy_enabled", True))
+    hybrid_memory_extraction_enabled = bool(_get_setting("hybrid_memory_extraction_enabled", True))
+    confidence_threshold = float(_get_setting("hybrid_memory_confidence_threshold", 0.75))
 
     learned = []
     retired = []
+    regex_keys = set()
 
-    # 1. Automatic Memory Extraction (non-blocking)
+    # 1. Automatic Deterministic Regex Memory Extraction (non-blocking)
     try:
         memories = classify_memory(user)
         for memory in memories:
+            cat = memory.get("category", "")
+            k = memory.get("key", "")
+            regex_keys.add((cat, k))
             action = memory.get("action", "store")
             if action == "retire":
                 try:
                     deleted = retire_structured(
-                        category=memory["category"],
-                        key=memory["key"],
+                        category=cat,
+                        key=k,
                         value=memory.get("value"),
                     )
                     if deleted > 0:
                         retired.append(memory)
                 except Exception as e:
-                    logger.error("Failed to retire memory %s/%s: %s", memory["category"], memory["key"], e)
+                    logger.error("Failed to retire memory %s/%s: %s", cat, k, e)
             else:
                 try:
                     remember_structured(
-                        category=memory["category"],
-                        key=memory["key"],
+                        category=cat,
+                        key=k,
                         value=memory["value"],
                         confidence=memory["confidence"],
                     )
                     learned.append(memory)
                 except Exception as e:
-                    logger.error("Failed to store memory %s/%s: %s", memory["category"], memory["key"], e)
+                    logger.error("Failed to store memory %s/%s: %s", cat, k, e)
     except Exception as e:
         logger.error("Memory auto-classification error: %s", e)
 
@@ -679,6 +806,72 @@ def process_user_turn(
 
     if lowered in ("show planner history", "show plan history"):
         return {"reply": planner.recent_outcomes(), "model": "planner", "type": "plan", "learned": learned, "retired": retired}
+
+    # Reusable Orange Skills commands (Stage 5E)
+    if lowered == "/skills":
+        from tools.skills import list_skills
+        all_skills = list_skills()
+        enabled_skills = [s for s in all_skills if s.get("enabled", True)]
+        if not enabled_skills:
+            reply_md = "No Orange Skills are currently enabled. Use `/skill` or configure them in Settings."
+        else:
+            lines = ["### ⚡ Available Orange Skills\n"]
+            for s in enabled_skills:
+                lines.append(f"- **/skill {s['slug']}** — {s.get('name', s['slug'])} `[{s.get('risk_level', 'SAFE')}]`\n  {s.get('description', '')}")
+            reply_md = "\n".join(lines)
+        return {
+            "reply": reply_md,
+            "model": "skills_engine",
+            "type": "skill_list",
+            "learned": learned,
+            "retired": retired,
+        }
+
+    if lowered.startswith("/skill ") or lowered == "/skill":
+        from tools.skills import execute_skill
+        rest = user[len("/skill"):].strip()
+        if not rest:
+            return {
+                "reply": "Usage: `/skill <slug> [optional input]` or `/skills` to list available skills.",
+                "model": "skills_engine",
+                "type": "skill_error",
+                "learned": learned,
+                "retired": retired,
+            }
+        parts = rest.split(None, 1)
+        slug = parts[0]
+        skill_input = parts[1] if len(parts) > 1 else ""
+
+        exec_res = execute_skill(slug, input_text=skill_input, prompt_fn=prompt_fn)
+        if not exec_res.get("success"):
+            err_status = exec_res.get("status")
+            if err_status in ("not_found", "disabled"):
+                reply_text = f"⚠️ Orange Skill '{slug}' is disabled or not found. Type `/skills` to view available skills."
+            elif err_status == "blocked":
+                reply_text = f"⚠️ Orange Skill '{slug}' was blocked by safety guardrails:\n{exec_res.get('output')}"
+            elif err_status == "cancelled":
+                reply_text = f"Action cancelled: Execution of skill '{slug}' was cancelled."
+            else:
+                reply_text = f"Error executing skill '{slug}': {exec_res.get('output')}"
+            return {
+                "reply": reply_text,
+                "model": "skills_engine",
+                "type": f"skill_{err_status}",
+                "skill_used": slug,
+                "tool_steps": exec_res.get("step_results", []),
+                "learned": learned,
+                "retired": retired,
+            }
+
+        return {
+            "reply": exec_res.get("output", f"Skill '{slug}' executed successfully."),
+            "model": "skills_engine",
+            "type": "skill",
+            "skill_used": slug,
+            "tool_steps": exec_res.get("step_results", []),
+            "learned": learned,
+            "retired": retired,
+        }
 
     # Daily Briefing configuration commands
     if lowered in ("briefing enable", "enable morning briefing", "enable briefing", "briefing on"):
@@ -911,6 +1104,17 @@ def process_user_turn(
     )
     profile = budget_res.formatted_profile
     legacy_memories = budget_res.formatted_legacy or "None"
+    active_work = getattr(budget_res, "active_work", "")
+
+    active_work_section = ""
+    if active_work:
+        active_work_section = f"""
+
+    ==================================================
+    ACTIVE WORKSPACE & JOBS
+    ==================================================
+
+    {active_work}"""
 
     current_energy = mood.get_energy()
     current_mood_label = mood.mood_label(current_energy)
@@ -929,10 +1133,43 @@ def process_user_turn(
         else ""
     )
 
+    adaptive_directive_section = ""
+    if adaptive_empathy_enabled:
+        style_directive = build_adaptive_style_directive(active_state)
+        if style_directive:
+            adaptive_directive_section = f"""
+
+    ==================================================
+    ADAPTIVE CONVERSATIONAL DIRECTIVE
+    ==================================================
+
+    {style_directive}"""
+
+    preflight_context = gather_silent_preflight_context(user)
+    preflight_section = ""
+    if preflight_context:
+        preflight_section = f"""
+
+    ==================================================
+    SILENT PRE-FLIGHT REPOSITORY CONTEXT
+    ==================================================
+
+    {preflight_context}"""
+
+    attachment_section = ""
+    if attachment_context:
+        attachment_section = f"""
+
+    ==================================================
+    ATTACHED FILES & SCREENSHOTS CONTEXT
+    ==================================================
+
+    {attachment_context}"""
+
     system_prompt = f"""
     {SYSTEM_PROMPT}
     {mood_block}
-    {verbosity_instruction}
+    {verbosity_instruction}{adaptive_directive_section}{preflight_section}{attachment_section}
 
     ==================================================
     RUNTIME PERMISSIONS
@@ -948,7 +1185,7 @@ def process_user_turn(
     LEGACY MEMORIES
     ==================================================
 
-    {legacy_memories}
+    {legacy_memories}{active_work_section}
 
     Use the stored user profile and legacy memories naturally in conversation.
     Always trust the user profile over legacy memories if both contain the same information.
@@ -956,30 +1193,125 @@ def process_user_turn(
     Never invent personal information that is not stored.
     """
 
-    try:
-        result = api_client.assist(
+    def _run_assist():
+        return api_client.assist(
             message=user,
             history=history,
             system_instruction=system_prompt,
             profile=profile,
         )
-        reply = result["reply"]
-        model_name = result.get("model", "api")
-        mood.apply_event("success")
-    except OrangeAPIConnectionError as e:
-        mood.apply_event("error")
-        logger.warning("Orange API connection error: %s", e)
-        return {"reply": str(e), "model": "api", "type": "error", "is_connection_error": True, "learned": learned, "retired": retired}
-    except OrangeAPIResponseError as e:
-        mood.apply_event("error")
-        logger.warning("Orange API response error: %s", e)
-        return {"reply": str(e), "model": "api", "type": "error", "learned": learned, "retired": retired}
-    except Exception as e:
-        mood.apply_event("error")
-        logger.error("Unexpected error during API call: %s", e)
-        return {"reply": "An unexpected error occurred while communicating with Orange API.", "model": "api", "type": "error", "learned": learned, "retired": retired}
 
-    history.append({"role": "user", "content": user})
+    def _run_hybrid():
+        if not hybrid_memory_extraction_enabled:
+            return {"memories": [], "conversational_state": None}
+        return extract_memories_and_state_hybrid(
+            user_message=user,
+            api_client=api_client,
+            recent_turns=history,
+            min_confidence=confidence_threshold,
+        )
+
+    assist_exc = None
+    result = None
+    hybrid_res = {"memories": [], "conversational_state": None}
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        assist_future = executor.submit(_run_assist)
+        hybrid_future = executor.submit(_run_hybrid)
+
+        try:
+            result = assist_future.result()
+        except Exception as e:
+            assist_exc = e
+
+        try:
+            hybrid_res = hybrid_future.result()
+        except Exception as e:
+            logger.warning("Hybrid extraction future error: %s", e)
+
+    # Merge novel hybrid LLM extractions (skipping identical category/key if already matched by regex
+    # and skipping no-op writes if category, key, value is already stored identically)
+    if hybrid_res and isinstance(hybrid_res, dict):
+        try:
+            existing_structured = recall_structured()
+            existing_map = {(m["category"], m["key"]): m.get("value") for m in existing_structured}
+
+            for mem_item in hybrid_res.get("memories", []):
+                cat = mem_item.get("category", "")
+                k = mem_item.get("key", "")
+                # Deterministic regex matches take precedence on identical (category, key) pairs
+                if (cat, k) in regex_keys:
+                    continue
+
+                action = mem_item.get("action", "store")
+                val = mem_item.get("value", "")
+
+                if action == "retire":
+                    try:
+                        deleted = retire_structured(category=cat, key=k, value=val if val else None)
+                        if deleted > 0:
+                            retired.append(mem_item)
+                    except Exception as e:
+                        logger.error("Failed to retire hybrid memory %s/%s: %s", cat, k, e)
+                else:
+                    # Skip no-op writes if already stored identically
+                    if existing_map.get((cat, k)) == val:
+                        continue
+                    try:
+                        remember_structured(
+                            category=cat,
+                            key=k,
+                            value=val,
+                            confidence=mem_item.get("confidence", 0.75),
+                        )
+                        learned.append(mem_item)
+                        existing_map[(cat, k)] = val
+                    except Exception as e:
+                        logger.error("Failed to store hybrid memory %s/%s: %s", cat, k, e)
+        except Exception as e:
+            logger.error("Error merging hybrid memories: %s", e)
+
+        # Update session conversational state with verified state from MiniMax M3.1 Flash when returned
+        llm_state = hybrid_res.get("conversational_state")
+        if llm_state and isinstance(llm_state, dict):
+            _session_conversational_state = llm_state
+        else:
+            _session_conversational_state = active_state
+    else:
+        _session_conversational_state = active_state
+
+    if assist_exc:
+        mood.apply_event("error")
+        if isinstance(assist_exc, OrangeAPIConnectionError):
+            logger.warning("Orange API connection error: %s", assist_exc)
+            return {"reply": str(assist_exc), "model": "api", "type": "error", "is_connection_error": True, "learned": learned, "retired": retired, "conversational_state": _session_conversational_state}
+        elif isinstance(assist_exc, OrangeAPIResponseError):
+            logger.warning("Orange API response error: %s", assist_exc)
+            return {"reply": str(assist_exc), "model": "api", "type": "error", "learned": learned, "retired": retired, "conversational_state": _session_conversational_state}
+        else:
+            logger.error("Unexpected error during API call: %s", assist_exc)
+            return {"reply": "An unexpected error occurred while communicating with Orange API.", "model": "api", "type": "error", "learned": learned, "retired": retired, "conversational_state": _session_conversational_state}
+
+    reply = result["reply"]
+    model_name = result.get("model", "api")
+    mood.apply_event("success")
+
+    clean_att_meta = []
+    if attachments:
+        clean_att_meta = [
+            {
+                "name": att.get("name", "attachment"),
+                "kind": att.get("kind", "file"),
+                "char_count": att.get("char_count", 0),
+            }
+            for att in attachments
+            if isinstance(att, dict)
+        ]
+
+    history_user_entry = {"role": "user", "content": user}
+    if clean_att_meta:
+        history_user_entry["attachments"] = clean_att_meta
+    history.append(history_user_entry)
     history.append({"role": "assistant", "content": reply})
     del history[:-MAX_HISTORY_TURNS]
 
@@ -1000,10 +1332,24 @@ def process_user_turn(
         except Exception:
             pass
 
-    save_turn("user", user)
+    if clean_att_meta:
+        saved_user_turn = f"{user}\n\n[Attachments: {json.dumps(clean_att_meta)}]"
+    else:
+        saved_user_turn = user
+
+    save_turn("user", saved_user_turn)
     save_turn("assistant", reply)
 
-    outcome = {"reply": reply, "model": model_name, "type": "assistant", "learned": learned, "retired": retired}
+    outcome = {
+        "reply": reply,
+        "model": model_name,
+        "type": "assistant",
+        "learned": learned,
+        "retired": retired,
+        "conversational_state": _session_conversational_state,
+    }
+    if clean_att_meta:
+        outcome["attachments"] = clean_att_meta
     if rec_obj:
         outcome["recommendation"] = rec_obj
     return outcome

@@ -1699,6 +1699,7 @@ from brain.context_budget import (
     render_legacy_memories,
     render_agent_relevant_lines,
     safe_bounded_fallback_profile,
+    build_active_work_summary,
 )
 
 # ==========================================================

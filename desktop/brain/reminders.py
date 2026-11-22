@@ -167,4 +167,53 @@ def cancel_reminder(reminder_id: int) -> bool:
     conn.commit()
     return cursor.rowcount > 0
 
+
+def get_reminder(reminder_id: int) -> Optional[dict]:
+    """Return a single reminder by id, or None if not found."""
+    conn = get_connection()
+    cursor = conn.execute(
+        "SELECT id, message, due_at, created_at, fired FROM reminders WHERE id = ?",
+        (reminder_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "message": row[1],
+        "due_at": row[2],
+        "created_at": row[3],
+        "completed": bool(row[4]),
+        "fired": int(row[4]),
+    }
+
+
+def list_reminders(include_completed: bool = False) -> list[dict]:
+    """Return reminders ordered by due_at ASC.
+
+    If include_completed is False, only pending (unfired) reminders are returned.
+    If include_completed is True, both pending and completed (fired) reminders are returned.
+    """
+    conn = get_connection()
+    if include_completed:
+        cursor = conn.execute(
+            "SELECT id, message, due_at, created_at, fired FROM reminders ORDER BY due_at ASC"
+        )
+    else:
+        cursor = conn.execute(
+            "SELECT id, message, due_at, created_at, fired FROM reminders WHERE fired = 0 ORDER BY due_at ASC"
+        )
+    return [
+        {
+            "id": row[0],
+            "message": row[1],
+            "due_at": row[2],
+            "created_at": row[3],
+            "completed": bool(row[4]),
+            "fired": int(row[4]),
+        }
+        for row in cursor.fetchall()
+    ]
+
+
 sys.modules[__name__].__class__ = DatabaseAwareModule

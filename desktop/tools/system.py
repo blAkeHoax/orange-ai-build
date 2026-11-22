@@ -53,3 +53,110 @@ def get_battery() -> str:
 
     status = "Charging" if battery.power_plugged else "Not Charging"
     return f"{battery.percent}% ({status})"
+
+
+# ---------------------------------------------------------------------------
+# Windows Clipboard Control (Stage 5D)
+# ---------------------------------------------------------------------------
+
+def get_clipboard() -> str:
+    """Read text content from the Windows clipboard."""
+    try:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+        user32.GetClipboardData.restype = ctypes.c_void_p
+        user32.GetClipboardData.argtypes = [ctypes.c_uint]
+        kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalLock.restype = ctypes.c_wchar_p
+        kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+
+        CF_UNICODETEXT = 13
+        if not user32.OpenClipboard(None):
+            return _get_clipboard_fallback()
+
+        try:
+            h_data = user32.GetClipboardData(CF_UNICODETEXT)
+            if not h_data:
+                return ""
+            data_ptr = kernel32.GlobalLock(h_data)
+            text = str(data_ptr) if data_ptr else ""
+            kernel32.GlobalUnlock(h_data)
+            return text
+        finally:
+            user32.CloseClipboard()
+    except Exception:
+        return _get_clipboard_fallback()
+
+
+def _get_clipboard_fallback() -> str:
+    """Fallback clipboard reader via PowerShell."""
+    try:
+        import subprocess
+        proc = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return proc.stdout.rstrip("\r\n")
+    except Exception:
+        return ""
+
+
+def set_clipboard(text: str) -> str:
+    """Set text content onto the Windows clipboard."""
+    val = text if text is not None else ""
+    try:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GlobalAlloc.restype = ctypes.c_void_p
+        kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+        user32.SetClipboardData.restype = ctypes.c_void_p
+        user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+
+        CF_UNICODETEXT = 13
+        GMEM_MOVEABLE = 0x0002
+
+        if not user32.OpenClipboard(None):
+            return _set_clipboard_fallback(val)
+
+        try:
+            user32.EmptyClipboard()
+            data_bytes = (val + "\0").encode("utf-16le")
+            h_mem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data_bytes))
+            if not h_mem:
+                return _set_clipboard_fallback(val)
+
+            p_mem = kernel32.GlobalLock(h_mem)
+            if p_mem:
+                ctypes.memmove(p_mem, data_bytes, len(data_bytes))
+                kernel32.GlobalUnlock(h_mem)
+                user32.SetClipboardData(CF_UNICODETEXT, h_mem)
+                return f"Successfully set clipboard ({len(val)} characters)."
+            else:
+                return _set_clipboard_fallback(val)
+        finally:
+            user32.CloseClipboard()
+    except Exception:
+        return _set_clipboard_fallback(val)
+
+
+def _set_clipboard_fallback(text: str) -> str:
+    """Fallback clipboard writer via PowerShell."""
+    try:
+        import subprocess
+        subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$input | Set-Clipboard"],
+            input=text,
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+        return f"Successfully set clipboard ({len(text)} characters)."
+    except Exception as e:
+        return f"Error setting clipboard: {e}"

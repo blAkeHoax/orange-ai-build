@@ -85,3 +85,72 @@ def close_process(process_name: str) -> str:
         closed_names.append(proc.info.get("name", process_name))
 
     return f"Closed {len(closed_names)} process(es) matching '{process_name}'."
+
+
+# ---------------------------------------------------------------------------
+# Process Management Control (Stage 5D)
+# ---------------------------------------------------------------------------
+
+def manage_process(action: str, name_or_pid: str | int = "") -> str:
+    """
+    Manage system processes by action ('status', 'list', 'kill', 'terminate') and name or PID.
+    """
+    if not action or not isinstance(action, str):
+        return "Error: Action must be a non-empty string ('status', 'list', 'kill', 'terminate')."
+
+    act = action.strip().lower()
+
+    # Check if name_or_pid is PID
+    pid = None
+    name = None
+    if isinstance(name_or_pid, int):
+        pid = name_or_pid
+    elif isinstance(name_or_pid, str):
+        if name_or_pid.strip().isdigit():
+            pid = int(name_or_pid.strip())
+        else:
+            name = name_or_pid.strip()
+
+    if act == "status":
+        if pid is not None:
+            exists = psutil.pid_exists(pid)
+            return f"Process with PID {pid} is {'running' if exists else 'not running'}."
+        elif name:
+            running = is_running(name)
+            return f"Process '{name}' is {'running' if running else 'not running'}."
+        return "Error: Specify a valid process name or PID."
+
+    if act == "list":
+        if name:
+            matches = []
+            target = _normalize(name)
+            for proc in psutil.process_iter(["pid", "name"]):
+                try:
+                    pname = proc.info["name"]
+                    if pname and target in _normalize(pname):
+                        matches.append(f"{proc.info['pid']} - {pname}")
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            return "\n".join(matches) if matches else f"No processes matching '{name}' found."
+        return list_processes()
+
+    if act in ("kill", "terminate"):
+        if pid is not None:
+            try:
+                proc = psutil.Process(pid)
+                pname = proc.name()
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except psutil.TimeoutExpired:
+                    proc.kill()
+                return f"Successfully terminated process '{pname}' (PID: {pid})."
+            except psutil.NoSuchProcess:
+                return f"Process with PID {pid} not found."
+            except Exception as e:
+                return f"Error terminating PID {pid}: {e}"
+        elif name:
+            return close_process(name)
+        return "Error: Specify a valid process name or PID to terminate."
+
+    return f"Error: Unknown action '{action}'. Supported actions: 'status', 'list', 'kill', 'terminate'."

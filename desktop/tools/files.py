@@ -806,3 +806,133 @@ def find_folder(
     if matches:
         return f"Found {len(matches)} folder(s) named '{folder_name}':\n" + "\n".join(matches)
     return f"No folder named '{folder_name}' was found on mounted drives."
+
+
+# ---------------------------------------------------------------------------
+# Full Windows Filesystem Control (Stage 5D)
+# ---------------------------------------------------------------------------
+
+def write_file(path: str, content: str) -> str:
+    """
+    Create or overwrite a file with the given content across any local drive.
+    Parent directories are automatically created if they do not exist.
+    """
+    if not path or not isinstance(path, str) or not path.strip():
+        return "Error: Path must be a non-empty string."
+
+    target_path = Path(path.strip()).resolve()
+
+    from tools.permissions import is_catastrophic_command
+    is_cat, cat_reason = is_catastrophic_command(str(target_path))
+    if is_cat:
+        return f"Action blocked: {cat_reason}"
+
+    try:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(target_path, "w", encoding="utf-8") as f:
+            f.write(content if content is not None else "")
+        return f"Successfully wrote {len(content or '')} characters to '{target_path}'."
+    except Exception as e:
+        return f"Error writing file '{target_path}': {e}"
+
+
+def append_file(path: str, content: str) -> str:
+    """
+    Append text content to a file across any local drive.
+    Creates the file and parent directories if they do not exist.
+    """
+    if not path or not isinstance(path, str) or not path.strip():
+        return "Error: Path must be a non-empty string."
+
+    target_path = Path(path.strip()).resolve()
+
+    from tools.permissions import is_catastrophic_command
+    is_cat, cat_reason = is_catastrophic_command(str(target_path))
+    if is_cat:
+        return f"Action blocked: {cat_reason}"
+
+    try:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(target_path, "a", encoding="utf-8") as f:
+            f.write(content if content is not None else "")
+        return f"Successfully appended {len(content or '')} characters to '{target_path}'."
+    except Exception as e:
+        return f"Error appending to file '{target_path}': {e}"
+
+
+def delete_file(path: str) -> str:
+    """
+    Delete a file or directory across any local drive.
+    Protected by the catastrophic safety guard.
+    """
+    if not path or not isinstance(path, str) or not path.strip():
+        return "Error: Path must be a non-empty string."
+
+    target_path = Path(path.strip()).resolve()
+
+    from tools.permissions import is_catastrophic_command
+    is_cat, cat_reason = is_catastrophic_command(str(target_path))
+    if is_cat:
+        return f"Action blocked: {cat_reason}"
+
+    if not target_path.exists():
+        return f"Error: Path does not exist: '{target_path}'."
+
+    try:
+        if target_path.is_dir():
+            shutil.rmtree(target_path)
+            return f"Successfully deleted directory '{target_path}'."
+        else:
+            target_path.unlink()
+            return f"Successfully deleted file '{target_path}'."
+    except Exception as e:
+        return f"Error deleting '{target_path}': {e}"
+
+
+def move_path(src: str, dst: str) -> str:
+    """
+    Move or rename a file or directory from src to dst.
+    """
+    if not src or not dst:
+        return "Error: Both src and dst must be non-empty strings."
+
+    src_path = Path(src.strip()).resolve()
+    dst_path = Path(dst.strip()).resolve()
+
+    from tools.permissions import is_catastrophic_command
+    for p in (src_path, dst_path):
+        is_cat, cat_reason = is_catastrophic_command(str(p))
+        if is_cat:
+            return f"Action blocked: {cat_reason}"
+
+    if not src_path.exists():
+        return f"Error: Source path does not exist: '{src_path}'."
+
+    try:
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src_path), str(dst_path))
+        return f"Successfully moved '{src_path}' to '{dst_path}'."
+    except Exception as e:
+        return f"Error moving '{src_path}' to '{dst_path}': {e}"
+
+
+def create_directory(path: str) -> str:
+    """
+    Create a new directory and any missing parent directories across any local drive.
+    """
+    if not path or not isinstance(path, str) or not path.strip():
+        return "Error: Path must be a non-empty string."
+
+    target_path = Path(path.strip()).resolve()
+
+    from tools.permissions import is_catastrophic_command
+    is_cat, cat_reason = is_catastrophic_command(str(target_path))
+    if is_cat:
+        return f"Action blocked: {cat_reason}"
+
+    try:
+        target_path.mkdir(parents=True, exist_ok=True)
+        return f"Successfully created directory '{target_path}'."
+    except Exception as e:
+        return f"Error creating directory '{target_path}': {e}"
+

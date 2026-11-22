@@ -70,6 +70,7 @@ class BriefingSynthesizer:
                     message=prompt,
                     system_instruction=system_instruction,
                     profile=None,
+                    task_type="reasoning",
                     timeout=timeout,
                 )
                 if res.get("success") and res.get("reply"):
@@ -178,7 +179,7 @@ class BriefingSynthesizer:
         if len(prompt_body) > max_chars:
             prompt_body = prompt_body[:max_chars - 30] + "\n[Context truncated for budget]"
 
-        user_message = f"Please synthesize today's daily briefing from the following verified facts:\n\n{prompt_body}"
+        user_message = f"Synthesize an executive morning briefing from the following verified facts:\n\n{prompt_body}"
         return user_message, BRIEFING_SYSTEM_INSTRUCTION
 
     def _generate_deterministic_briefing(self, context: DailyBriefingContext) -> str:

@@ -3,4 +3,8 @@ psutil>=5.9,<8
 python-dotenv>=1,<2
 customtkinter==5.2.2
 darkdetect==0.8.0
+pypdf>=5.0.0
+pytesseract>=0.3.10
+pillow>=10.0.0
+
 

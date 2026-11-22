@@ -75,7 +75,7 @@ def _dispatch_job(job_manager, target, on_job_event, async_job: bool):
         return res
 
 
-def check_once(on_reminder_due, on_job_event=None, job_manager=None, async_job: bool = False, auto_mark_fired: bool = True):
+def check_once(on_reminder_due=None, on_job_event=None, job_manager=None, async_job: bool = False, auto_mark_fired: bool = True):
     """
     Run a single scheduler check pass synchronously.
     Handles reminders and at most one eligible job.
@@ -86,20 +86,22 @@ def check_once(on_reminder_due, on_job_event=None, job_manager=None, async_job: 
     - `False`: Callback rejects firing or handles asynchronously (e.g. GUI dispatch awaiting UI ack);
               scheduler will NOT mark the reminder fired.
     - `None` (or non-boolean): Legacy contract; marks reminder fired ONLY if `auto_mark_fired=True`.
+    - If `on_reminder_due is None`: Reminder polling is bypassed (e.g. in Tauri mode where Stage2C worker owns reminders).
     """
-    # 1. Reminders check
-    try:
-        due = get_due_reminders(datetime.now())
-        for reminder in due:
-            res = on_reminder_due(reminder)
-            if res is False:
-                continue
-            elif res is True:
-                mark_fired(reminder["id"])
-            elif res is None and auto_mark_fired:
-                mark_fired(reminder["id"])
-    except Exception as e:
-        logger.error("Reminder check pass failed: %s", e)
+    # 1. Reminders check (only when on_reminder_due callback is provided)
+    if on_reminder_due is not None:
+        try:
+            due = get_due_reminders(datetime.now())
+            for reminder in due:
+                res = on_reminder_due(reminder)
+                if res is False:
+                    continue
+                elif res is True:
+                    mark_fired(reminder["id"])
+                elif res is None and auto_mark_fired:
+                    mark_fired(reminder["id"])
+        except Exception as e:
+            logger.error("Reminder check pass failed: %s", e)
 
     # 2. Jobs check (enforcing maximum 1 RUNNING job)
     if job_manager is not None:
@@ -134,7 +136,7 @@ def check_once(on_reminder_due, on_job_event=None, job_manager=None, async_job: 
     return None
 
 
-def _check_loop(on_reminder_due, on_job_event=None, job_manager=None, auto_mark_fired: bool = True):
+def _check_loop(on_reminder_due=None, on_job_event=None, job_manager=None, auto_mark_fired: bool = True):
     while not _stop_event.is_set():
         check_once(on_reminder_due, on_job_event=on_job_event, job_manager=job_manager, async_job=True, auto_mark_fired=auto_mark_fired)
         # Wait in small increments rather than one long sleep, so stop()
@@ -142,11 +144,11 @@ def _check_loop(on_reminder_due, on_job_event=None, job_manager=None, auto_mark_
         _stop_event.wait(CHECK_INTERVAL_SECONDS)
 
 
-def start(on_reminder_due, on_job_event=None, job_manager=None, auto_mark_fired: bool = True):
+def start(on_reminder_due=None, on_job_event=None, job_manager=None, auto_mark_fired: bool = True):
     """
     Start the background reminder-and-job-checking thread.
 
-    on_reminder_due: callback for due reminders.
+    on_reminder_due: optional callback for due reminders. If None, reminder polling is bypassed.
     on_job_event: optional callback invoked when a background job state changes.
     job_manager: optional JobManager instance to poll for retries and pending jobs.
     auto_mark_fired: whether to automatically mark reminders fired in the scheduler loop.
